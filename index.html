@@ -10,7 +10,6 @@
 <head>
 <meta charset="UTF-8">
 <title>TV Production Slate — Priority & Royalty Prototype</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root {
     color-scheme: light;
@@ -257,23 +256,6 @@
 </style>
 </head>
 <body>
-<!-- Auth overlay -->
-<div id="auth-overlay" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:1000;align-items:center;justify-content:center;">
-  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:36px;max-width:380px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,.08);">
-    <div style="font-size:22px;font-weight:700;margin:0 0 4px;">TV Production Slate</div>
-    <div style="color:var(--muted);font-size:13px;margin:0 0 24px;">Sign in with your Audio Network email to access the dashboard.</div>
-    <div id="auth-form">
-      <input type="email" id="auth-email" placeholder="you@audionetwork.com" style="width:100%;padding:9px 12px;font-size:14px;border:1px solid var(--border-strong);border-radius:6px;margin-bottom:10px;font-family:inherit;background:#fff;color:var(--text);">
-      <button id="auth-submit" style="width:100%;padding:10px;font-size:13px;font-weight:600;background:var(--text);color:#fff;border:none;border-radius:6px;cursor:pointer;">Send magic link</button>
-      <div id="auth-msg" style="margin-top:12px;font-size:12px;color:var(--muted);min-height:18px;"></div>
-    </div>
-  </div>
-</div>
-<!-- Loading overlay -->
-<div id="loading-overlay" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:999;align-items:center;justify-content:center;">
-  <div style="color:var(--muted);font-size:13px;letter-spacing:.04em;">Loading…</div>
-</div>
-
 <div class="wrap">
   <nav class="proto-tabs">
     <a href="#slate" class="active" data-tab="slate">Slate</a>
@@ -349,7 +331,7 @@
       </tr></thead>
       <tbody id="ch-rows"></tbody>
     </table>
-    <footer style="margin-top:18px; font-size:11px; color:var(--muted);">Edits auto-save to Supabase. Click the chevron to expand a channel and add detailed notes.</footer>
+    <footer style="margin-top:18px; font-size:11px; color:var(--muted);">Edits auto-save to <code>localStorage["slate-channels-v1"]</code>. Click the chevron to expand a channel and add detailed notes.</footer>
   </section>
 
   <section id="tab-agreements" class="tab-section">
@@ -380,145 +362,12 @@
       </tr></thead>
       <tbody id="ag-rows"></tbody>
     </table>
-    <footer style="margin-top:18px; font-size:11px; color:var(--muted);">Edits auto-save to Supabase. Click the chevron to expand and capture SalesForce opp, territories, content types, and notes.</footer>
+    <footer style="margin-top:18px; font-size:11px; color:var(--muted);">Edits auto-save to <code>localStorage["slate-agreements-v1"]</code>. Click the chevron to expand and capture SalesForce opp, territories, content types, and notes.</footer>
   </section>
 
 </div>
 
 <script>
-// === Supabase init ================================================================
-const SUPABASE_URL = 'https://yhpdkoscfnsoozhyhufj.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlocGRrb3NjZm5zb296aHlodWZqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MTI3MDYsImV4cCI6MjA5NTM4ODcwNn0.r6u7sDKqskKYRD5t56Si1PwK5hQjITjCC3B3G7JNH3I';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-// === Auth =========================================================================
-function showAuthOverlay() {
-  document.getElementById('auth-overlay').style.display = 'flex';
-  document.getElementById('loading-overlay').style.display = 'none';
-}
-function showLoadingOverlay() {
-  document.getElementById('loading-overlay').style.display = 'flex';
-  document.getElementById('auth-overlay').style.display = 'none';
-}
-function hideOverlays() {
-  document.getElementById('auth-overlay').style.display = 'none';
-  document.getElementById('loading-overlay').style.display = 'none';
-}
-
-document.getElementById('auth-submit').addEventListener('click', async () => {
-  const email = document.getElementById('auth-email').value.trim();
-  const msg = document.getElementById('auth-msg');
-  if (!email) { msg.textContent = 'Please enter your email.'; return; }
-  document.getElementById('auth-submit').disabled = true;
-  document.getElementById('auth-submit').textContent = 'Sending…';
-  const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } });
-  if (error) {
-    msg.textContent = 'Error: ' + error.message;
-    document.getElementById('auth-submit').disabled = false;
-    document.getElementById('auth-submit').textContent = 'Send magic link';
-  } else {
-    msg.textContent = '✓ Magic link sent — check your inbox and click the link to sign in.';
-    document.getElementById('auth-submit').textContent = 'Sent';
-  }
-});
-document.getElementById('auth-email').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('auth-submit').click(); });
-
-sb.auth.onAuthStateChange(async (event, session) => {
-  if (event === 'SIGNED_IN' && session) {
-    showLoadingOverlay();
-    await initApp();
-    hideOverlays();
-  } else if (event === 'SIGNED_OUT') {
-    showAuthOverlay();
-  }
-});
-
-// === Supabase data layer ==========================================================
-async function chLoadFromDB() {
-  const { data, error } = await sb.from('channels').select('*').order('name');
-  if (error || !data || !data.length) return null; // null = use defaults
-  return data.map(c => ({
-    name: c.name, type: c.type,
-    royaltyPotential: c.royalty_potential,
-    proPayout: c.pro_payout,
-    rerunProbability: c.rerun_probability,
-    notes: c.notes || ''
-  }));
-}
-async function chSave(arr) {
-  const { data: existing } = await sb.from('channels').select('name');
-  const existingNames = (existing || []).map(r => r.name);
-  const newNames = arr.map(c => c.name);
-  const toDelete = existingNames.filter(n => !newNames.includes(n));
-  if (toDelete.length) await sb.from('channels').delete().in('name', toDelete);
-  if (arr.length) {
-    const rows = arr.map(c => ({ name: c.name, type: c.type, royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '' }));
-    await sb.from('channels').upsert(rows, { onConflict: 'name' });
-  }
-}
-
-async function agLoadFromDB() {
-  const { data, error } = await sb.from('agreements').select('*').order('entity');
-  if (error || !data || !data.length) return null;
-  return data.map(a => ({
-    entity: a.entity, entityType: a.entity_type, scope: a.scope,
-    thirdPartySync: a.third_party_sync, renewalDate: a.renewal_date || '',
-    status: a.status, salesforceUrl: a.salesforce_url || '',
-    territories: a.territories || '',
-    contentTypes: Array.isArray(a.content_types) ? a.content_types : [],
-    notes: a.notes || ''
-  }));
-}
-async function agSave(arr) {
-  const { data: existing } = await sb.from('agreements').select('entity');
-  const existingEntities = (existing || []).map(r => r.entity);
-  const newEntities = arr.map(a => a.entity);
-  const toDelete = existingEntities.filter(e => !newEntities.includes(e));
-  if (toDelete.length) await sb.from('agreements').delete().in('entity', toDelete);
-  if (arr.length) {
-    const rows = arr.map(a => ({ entity: a.entity, entity_type: a.entityType, scope: a.scope, third_party_sync: a.thirdPartySync, renewal_date: a.renewalDate || '', status: a.status, salesforce_url: a.salesforceUrl || '', territories: a.territories || '', content_types: a.contentTypes || [], notes: a.notes || '' }));
-    await sb.from('agreements').upsert(rows, { onConflict: 'entity' });
-  }
-}
-
-async function loadState() {
-  const { data } = await sb.from('slate_state').select('*').eq('id', 'singleton').single();
-  if (!data) return { favs: {}, archived: {}, edits: {}, added: [] };
-  return { favs: data.favs || {}, archived: data.archived || {}, edits: data.edits || {}, added: data.added || [] };
-}
-async function saveState(s) {
-  await sb.from('slate_state').update({ favs: s.favs, archived: s.archived, edits: s.edits, added: s.added }).eq('id', 'singleton');
-}
-
-// === Realtime =====================================================================
-let _realtimeSuppressed = false;
-function suppressRealtime(ms = 1500) { _realtimeSuppressed = true; setTimeout(() => { _realtimeSuppressed = false; }, ms); }
-function setupRealtime() {
-  sb.channel('db-changes')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'channels' }, async () => {
-      if (_realtimeSuppressed) return;
-      const fresh = await chLoadFromDB(); if (fresh) { channels.length = 0; fresh.forEach(c => channels.push(c)); }
-      recomputeAllSignals(); if (typeof renderChannels === 'function' && document.getElementById('tab-channels').classList.contains('active')) renderChannels();
-      const sb2 = document.getElementById('sortBy'); if (sb2) sortItems(sb2.value);
-      if (typeof render === 'function') render(); updateBannerCounts();
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'agreements' }, async () => {
-      if (_realtimeSuppressed) return;
-      const fresh = await agLoadFromDB(); if (fresh) { agreements.length = 0; fresh.forEach(a => agreements.push(a)); }
-      recomputeAllSignals(); if (typeof renderAgreements === 'function' && document.getElementById('tab-agreements').classList.contains('active')) renderAgreements();
-      const sb2 = document.getElementById('sortBy'); if (sb2) sortItems(sb2.value);
-      if (typeof render === 'function') render(); updateBannerCounts();
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'slate_state' }, async () => {
-      if (_realtimeSuppressed) return;
-      const fresh = await loadState(); Object.assign(state, fresh);
-      items.forEach(it => { if (it._userAdded) { const found = state.added.find(a => itemKeyOf(a) === itemKeyOf(it)); if (!found) { const idx = items.indexOf(it); if (idx > -1) items.splice(idx, 1); } } });
-      state.added.forEach(a => { if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) items.unshift({ ...a, _userAdded: true }); });
-      recomputeAllSignals(); if (typeof render === 'function') render();
-    })
-    .subscribe();
-}
-
 // === Slate items (seed) ============================================================
 const items = [
 { source:"trade", title:"Harry Potter", genre:"scripted", network:"HBO / Max", type:"streaming", studio:"Brontë Film and TV; Warner Bros. Television", status:"renew", statusLabel:"Renewed S2", detail:"Renewed for Season 2 (Chamber of Secrets).", prod:"Pre-production.", sources:[["Deadline","https://deadline.com/2026/05/harry-potter-renewed-season-2-hbo-jon-brown-co-showrunner-1236883218/"]], dateAdded:"2026-05-06" },
@@ -680,49 +529,20 @@ function recomputeAllSignals() {
   });
 }
 recomputeAllSignals();
-
-// === Async app init ===============================================================
-let channels = [];
-let agreements = [];
-let state = { favs: {}, archived: {}, edits: {}, added: [] };
-
-async function initApp() {
-  // Load channels
-  const chData = await chLoadFromDB();
-  if (chData) { channels = chData; } else { channels = CH_DEFAULTS.slice(); await chSave(channels); }
-
-  // Load agreements
-  const agData = await agLoadFromDB();
-  if (agData) { agreements = agData; } else { agreements = AG_DEFAULTS.slice(); await agSave(agreements); }
-
-  // Load slate state
-  state = await loadState();
-  state.favs = state.favs || {}; state.archived = state.archived || {};
-  state.edits = state.edits || {}; state.added = state.added || [];
-
-  if (state.added.length) {
-    state.added.forEach(a => { if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) items.unshift({ ...a, _userAdded: true }); });
+window.addEventListener("storage", e => {
+  if (e.key === "slate-channels-v1" || e.key === "slate-agreements-v1") {
+    recomputeAllSignals();
+    const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
+    if (typeof render === "function") render();
+    updateBannerCounts();
   }
-
+});
+window.addEventListener("focus", () => {
   recomputeAllSignals();
-  const sb2 = document.getElementById("sortBy"); if (sb2) sortItems(sb2.value);
-  setupRealtime();
-  render();
+  const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
+  if (typeof render === "function") render();
   updateBannerCounts();
-  switchTab((location.hash || "").replace("#","") || "slate");
-}
-
-// Start: check for existing session or wait for auth
-(async () => {
-  showLoadingOverlay();
-  const { data: { session } } = await sb.auth.getSession();
-  if (session) {
-    await initApp();
-    hideOverlays();
-  } else {
-    showAuthOverlay();
-  }
-})();
+});
 function updateBannerCounts() {
   const chCount = _channelsDB().length;
   const agCount = _agreementsDB().length;
@@ -744,23 +564,34 @@ sortItems("priority");
 
 const LAST_REFRESHED = "2026-05-07";
 const TODAY = new Date().toISOString().slice(0,10);
+
+const LS_KEY = "tv-tracker-state-v1";
+function loadState() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch(e) { return {}; } }
+function saveState(s) { try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch(e) {} }
+let state = loadState();
+state.favs = state.favs || {}; state.archived = state.archived || {};
+state.edits = state.edits || {}; state.added = state.added || [];
+
+if (state.added.length) {
+  state.added.forEach(a => { if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) items.unshift({ ...a, _userAdded: true }); });
+}
 function itemKeyOf(it) { return (it.title || "").toLowerCase().trim() + "|" + (it.source || ""); }
 function persistAdded() {
   state.added = items.filter(it => it._userAdded).map(it => {
     const { _userAdded, _royalty, _rerunProb, _covered, _musicStyle, _priority, _tier, _royaltySource, _rerunSource, _licenseSource, _licenseEntity, ...rest } = it;
     return { ...rest, _userAdded: true };
   });
-  suppressRealtime(); saveState(state);
+  saveState(state);
 }
 function itemKey(it) { return (it.title || "").toLowerCase().trim() + "|" + (it.source || ""); }
 function applyOverlay(it) { const k = itemKey(it); if (state.edits[k]) return Object.assign({}, it, state.edits[k]); return it; }
 function isFav(it) { return !!state.favs[itemKey(it)]; }
 function isArchived(it) { return !!state.archived[itemKey(it)]; }
 function isEdited(it) { return !!state.edits[itemKey(it)]; }
-function toggleFav(it) { const k = itemKey(it); if (state.favs[k]) delete state.favs[k]; else state.favs[k] = true; suppressRealtime(); saveState(state); render(); }
-function toggleArchive(it) { const k = itemKey(it); if (state.archived[k]) delete state.archived[k]; else state.archived[k] = true; suppressRealtime(); saveState(state); render(); }
-function saveEdit(it, fields) { const k = itemKey(it); state.edits[k] = fields; suppressRealtime(); saveState(state); render(); }
-function revertEdit(it) { const k = itemKey(it); delete state.edits[k]; suppressRealtime(); saveState(state); render(); }
+function toggleFav(it) { const k = itemKey(it); if (state.favs[k]) delete state.favs[k]; else state.favs[k] = true; saveState(state); render(); }
+function toggleArchive(it) { const k = itemKey(it); if (state.archived[k]) delete state.archived[k]; else state.archived[k] = true; saveState(state); render(); }
+function saveEdit(it, fields) { const k = itemKey(it); state.edits[k] = fields; saveState(state); render(); }
+function revertEdit(it) { const k = itemKey(it); delete state.edits[k]; saveState(state); render(); }
 function isNew(it) { if (!it.dateAdded) return false; return it.dateAdded === LAST_REFRESHED; }
 
 items.forEach(it => {
@@ -996,7 +827,8 @@ document.getElementById("addShow").addEventListener("click", () => {
     const firstInput = form.querySelector("input[data-field='title']"); if (firstInput) { firstInput.focus(); firstInput.select(); } }
 });
 
-// render(), updateBannerCounts(), and switchTab() are called by initApp() after async data load.
+render();
+updateBannerCounts();
 
 // === Tab switching =================================================================
 function switchTab(name) {
@@ -1009,7 +841,7 @@ function switchTab(name) {
 }
 document.querySelectorAll(".proto-tabs a").forEach(a => a.addEventListener("click", e => { e.preventDefault(); switchTab(a.dataset.tab); }));
 window.addEventListener("hashchange", () => switchTab((location.hash || "").replace("#","")));
-// Initial tab switch handled by initApp()
+switchTab((location.hash || "").replace("#","") || "slate");
 
 // === Channels dashboard ============================================================
 const CH_LS_KEY = "slate-channels-v1";
@@ -1051,8 +883,17 @@ const CH_DEFAULTS = [
 const CH_TYPES = ["broadcast", "cable", "streaming"];
 const CH_LEVELS = ["High", "Medium", "Low"];
 
-// chLoad and chSave are defined above in the Supabase data layer section.
-// channels array is populated by initApp().
+function chMigrate(arr) {
+  let changed = false;
+  arr.forEach(c => {
+    if (c.proTier && !c.royaltyPotential) { c.royaltyPotential = c.proTier === "A" ? "High" : c.proTier === "B" ? "Medium" : "Low"; delete c.proTier; changed = true; }
+    if (c.rerunIndex && !c.rerunProbability) { c.rerunProbability = c.rerunIndex === "high" ? "High" : c.rerunIndex === "med" ? "Medium" : "Low"; delete c.rerunIndex; changed = true; }
+  });
+  return changed;
+}
+function chLoad() { try { const stored = localStorage.getItem(CH_LS_KEY); if (stored) { const arr = JSON.parse(stored); if (chMigrate(arr)) chSave(arr); return arr; } } catch(e) {} return CH_DEFAULTS.slice(); }
+function chSave(arr) { try { localStorage.setItem(CH_LS_KEY, JSON.stringify(arr)); } catch(e) {} }
+let channels = chLoad();
 let chSearch = "";
 let chExpanded = new Set(); // track which rows are expanded (by index)
 
@@ -1102,7 +943,7 @@ function renderChannels() {
       channels[idx][field] = val;
       if (field === "royaltyPotential") e.target.className = "pot-" + val;
       if (field === "rerunProbability") e.target.className = "prob-" + val;
-      chSave(channels); suppressRealtime(); chUpdateStats();
+      chSave(channels); chUpdateStats();
       recomputeAllSignals();
       const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
       if (typeof render === "function") render();
@@ -1114,7 +955,7 @@ function renderChannels() {
         const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
         const field = e.target.dataset.field; if (!field) return;
         channels[idx][field] = e.target.value;
-        suppressRealtime(); chSave(channels);
+        chSave(channels);
       });
     }
   });
@@ -1122,7 +963,7 @@ function renderChannels() {
     el.addEventListener("click", () => {
       const idx = parseInt(el.dataset.idx);
       if (confirm(`Delete "${channels[idx].name}"?`)) {
-        channels.splice(idx, 1); chExpanded.clear(); suppressRealtime(); chSave(channels); renderChannels();
+        channels.splice(idx, 1); chExpanded.clear(); chSave(channels); renderChannels();
         recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
       }
     });
@@ -1144,11 +985,11 @@ function chUpdateStats() {
 }
 document.getElementById("ch-addRow").addEventListener("click", () => {
   channels.unshift({ name: "New channel", type: "cable", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "" });
-  suppressRealtime(); chSave(channels); renderChannels();
+  chSave(channels); renderChannels();
 });
 document.getElementById("ch-resetData").addEventListener("click", () => {
   if (confirm("Reset all channels to the seed defaults?")) {
-    channels = CH_DEFAULTS.slice(); suppressRealtime(); chSave(channels); renderChannels();
+    channels = CH_DEFAULTS.slice(); chSave(channels); renderChannels();
     recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
   }
 });
@@ -1197,8 +1038,27 @@ const AG_TPS_OPTIONS = ["Yes", "No", "Partial (see notes)"];
 const AG_STATUSES = ["active", "expired", "negotiating"];
 const CONTENT_TYPES = ["Promo Content", "In-Show", "Trailers", "Theme Songs", "Network IDs / Bumpers", "Recap / Stinger", "End Credits"];
 
-// agLoad and agSave are defined above in the Supabase data layer section.
-// agreements array is populated by initApp().
+function agMigrate(arr) {
+  let changed = false;
+  arr.forEach(a => {
+    if (a.scope === "covered" || a.scope === "partial") { a.scope = "Yes"; changed = true; }
+    else if (a.scope === "none") { a.scope = "No"; changed = true; }
+    if (a.thirdPartySync == null) {
+      if (a.scope === "No") a.thirdPartySync = "No";
+      else if (a.entityType === "production company") a.thirdPartySync = "Partial (see notes)";
+      else a.thirdPartySync = "Yes";
+      changed = true;
+    }
+    if (a.salesforceUrl == null) { a.salesforceUrl = ""; changed = true; }
+    if (a.territories == null) { a.territories = ""; changed = true; }
+    if (!Array.isArray(a.contentTypes)) { a.contentTypes = []; changed = true; }
+    // agreementType is no longer used; we keep it in localStorage for legacy data but don't display
+  });
+  return changed;
+}
+function agLoad() { try { const stored = localStorage.getItem(AG_LS_KEY); if (stored) { const arr = JSON.parse(stored); if (agMigrate(arr)) agSave(arr); return arr; } } catch(e) {} return AG_DEFAULTS.slice(); }
+function agSave(arr) { try { localStorage.setItem(AG_LS_KEY, JSON.stringify(arr)); } catch(e) {} }
+let agreements = agLoad();
 let agSearch = "";
 let agExpanded = new Set();
 
@@ -1271,7 +1131,7 @@ function renderAgreements() {
       if (field === "scope") e.target.className = "scope-" + e.target.value;
       if (field === "status") e.target.className = "status-" + e.target.value;
       if (field === "thirdPartySync") e.target.className = tpsClass(e.target.value);
-      agSave(agreements); suppressRealtime(); agUpdateStats();
+      agSave(agreements); agUpdateStats();
       recomputeAllSignals();
       const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
       if (typeof render === "function") render();
@@ -1281,7 +1141,7 @@ function renderAgreements() {
       el.addEventListener("blur", e => {
         const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
         const field = e.target.dataset.field; if (!field) return;
-        agreements[idx][field] = e.target.value; suppressRealtime(); agSave(agreements);
+        agreements[idx][field] = e.target.value; agSave(agreements);
       });
     }
   });
@@ -1294,7 +1154,7 @@ function renderAgreements() {
         if (e.target.checked) label.classList.add("checked"); else label.classList.remove("checked");
         const checked = Array.from(grp.querySelectorAll('input[type="checkbox"]:checked')).map(c => c.value);
         agreements[idx].contentTypes = checked;
-        suppressRealtime(); agSave(agreements);
+        agSave(agreements);
       });
     });
   });
@@ -1302,7 +1162,7 @@ function renderAgreements() {
     el.addEventListener("click", () => {
       const idx = parseInt(el.dataset.idx);
       if (confirm(`Delete "${agreements[idx].entity}"?`)) {
-        agreements.splice(idx, 1); agExpanded.clear(); suppressRealtime(); agSave(agreements); renderAgreements();
+        agreements.splice(idx, 1); agExpanded.clear(); agSave(agreements); renderAgreements();
         recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
       }
     });
@@ -1322,11 +1182,11 @@ function agUpdateStats() {
 }
 document.getElementById("ag-addRow").addEventListener("click", () => {
   agreements.unshift({ entity: "New entity", entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "", status: "active", salesforceUrl: "", territories: "", contentTypes: [], notes: "" });
-  suppressRealtime(); agSave(agreements); renderAgreements();
+  agSave(agreements); renderAgreements();
 });
 document.getElementById("ag-resetData").addEventListener("click", () => {
   if (confirm("Reset all agreements to the seed defaults?")) {
-    agreements = AG_DEFAULTS.slice(); suppressRealtime(); agSave(agreements); renderAgreements();
+    agreements = AG_DEFAULTS.slice(); agSave(agreements); renderAgreements();
     recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
   }
 });
