@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "name": "tv-production-slate",
+  "builds": [{ "src": "index.html", "use": "@vercel/static" }],
+  "routes": [{ "src": "/(.*)", "dest": "/index.html" }]
+}
