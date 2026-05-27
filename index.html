@@ -1,9 +1,8 @@
-<!DOCTYPE html>
-<script type="application/json" id="cowork-artifact-meta">
+<!DOCTYPE html><script type="application/json" id="cowork-artifact-meta">
 {
   "name": "Tv Tracker Sandbox",
   "schemaVersion": 1,
-  "description": "Sandbox prototype: TV Production Slate (Slate + Channels + Agreements). Not wired to any scheduled refresh."
+  "description": "TV Production Slate tracker with two-way Supabase sync. Edits in this artifact AND on the Vercel site (https://tv-tracker-may26.vercel.app) flow through the same Supabase backend, with the artifact polling every 8 seconds for remote changes."
 }
 </script>
 <html lang="en">
@@ -253,9 +252,33 @@
   .ct-group input[type="checkbox"] { display: none; }
   .sf-link { font-size: 12px; color: var(--accent); text-decoration: none; margin-left: 8px; }
   .sf-link:hover { text-decoration: underline; }
+
+  /* Sync status indicator */
+  #sync-indicator { position: fixed; bottom: 14px; right: 14px; z-index: 998;
+    padding: 6px 12px; border-radius: 18px;
+    background: #e6efe9; color: #2f7d4f;
+    font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    border: 1px solid #b7d4c2;
+    display: inline-flex; align-items: center; gap: 6px;
+    opacity: 0; transition: opacity .3s ease, background .3s ease, color .3s ease, border-color .3s ease; }
+  #sync-indicator.visible { opacity: 1; }
+  #sync-indicator.updated { background: #fff3d6; color: #876200; border-color: #e6c97a; }
+  #sync-indicator.updated #sync-dot { background: #876200; }
+  #sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #2f7d4f; transition: background .3s ease; }
 </style>
 </head>
 <body>
+<!-- Loading overlay -->
+<div id="loading-overlay" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:999;align-items:center;justify-content:center;">
+  <div style="color:var(--muted);font-size:13px;letter-spacing:.04em;">Loading…</div>
+</div>
+
+<!-- Two-way sync status indicator -->
+<div id="sync-indicator">
+  <span id="sync-dot"></span>
+  <span id="sync-text">Synced</span>
+</div>
+
 <div class="wrap">
   <nav class="proto-tabs">
     <a href="#slate" class="active" data-tab="slate">Slate</a>
@@ -331,7 +354,7 @@
       </tr></thead>
       <tbody id="ch-rows"></tbody>
     </table>
-    <footer style="margin-top:18px; font-size:11px; color:var(--muted);">Edits auto-save to <code>localStorage["slate-channels-v1"]</code>. Click the chevron to expand a channel and add detailed notes.</footer>
+    <footer style="margin-top:18px; font-size:11px; color:var(--muted);">Edits auto-save to Supabase and sync to teammates within ~8 seconds. Click the chevron to expand a channel and add detailed notes.</footer>
   </section>
 
   <section id="tab-agreements" class="tab-section">
@@ -362,12 +385,202 @@
       </tr></thead>
       <tbody id="ag-rows"></tbody>
     </table>
-    <footer style="margin-top:18px; font-size:11px; color:var(--muted);">Edits auto-save to <code>localStorage["slate-agreements-v1"]</code>. Click the chevron to expand and capture SalesForce opp, territories, content types, and notes.</footer>
+    <footer style="margin-top:18px; font-size:11px; color:var(--muted);">Edits auto-save to Supabase and sync to teammates within ~8 seconds. Click the chevron to expand and capture SalesForce opp, territories, content types, and notes.</footer>
   </section>
 
 </div>
 
 <script>
+// === Supabase REST helpers (fetch-based, no CDN) ==================================
+const SB_URL = 'https://yhpdkoscfnsoozhyhufj.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlocGRrb3NjZm5zb296aHlodWZqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MTI3MDYsImV4cCI6MjA5NTM4ODcwNn0.r6u7sDKqskKYRD5t56Si1PwK5hQjITjCC3B3G7JNH3I';
+const SB_H = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
+async function sbGet(path) {
+  try { const r = await fetch(SB_URL + path, { headers: SB_H }); return r.ok ? r.json() : null; } catch { return null; }
+}
+async function sbUpsert(path, body) {
+  try { await fetch(SB_URL + path, { method: 'POST', headers: { ...SB_H, 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) }); } catch {}
+}
+async function sbPatch(path, body) {
+  try { await fetch(SB_URL + path, { method: 'PATCH', headers: { ...SB_H, 'Prefer': 'return=minimal' }, body: JSON.stringify(body) }); } catch {}
+}
+async function sbDel(path) {
+  try { await fetch(SB_URL + path, { method: 'DELETE', headers: { ...SB_H, 'Prefer': 'return=minimal' } }); } catch {}
+}
+
+// === Supabase data layer (fetch-based) ============================================
+const CH_LS_KEY_SB = 'slate-channels-v1';
+const AG_LS_KEY_SB = 'slate-agreements-v1';
+const ST_LS_KEY_SB = 'tv-tracker-state-v1';
+
+function _mapChannel(c) { return { name: c.name, type: c.type, royaltyPotential: c.royalty_potential, proPayout: c.pro_payout, rerunProbability: c.rerun_probability, notes: c.notes || '' }; }
+function _mapAgreement(a) { return { entity: a.entity, entityType: a.entity_type, scope: a.scope, thirdPartySync: a.third_party_sync, renewalDate: a.renewal_date || '', status: a.status, salesforceUrl: a.salesforce_url || '', territories: a.territories || '', contentTypes: Array.isArray(a.content_types) ? a.content_types : [], notes: a.notes || '' }; }
+
+async function chLoadFromDB() {
+  const data = await sbGet('/rest/v1/channels?select=*&order=name');
+  if (!data || !data.length) return null;
+  const mapped = data.map(_mapChannel);
+  try { localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(mapped)); } catch {}
+  return mapped;
+}
+async function chSave(arr) {
+  try { localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(arr)); } catch {}
+  const rows = arr.map(c => ({ name: c.name, type: c.type, royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }));
+  await sbUpsert('/rest/v1/channels', rows);
+  const existing = await sbGet('/rest/v1/channels?select=name');
+  if (existing) { const nn = arr.map(c => c.name); for (const r of existing) { if (!nn.includes(r.name)) await sbDel('/rest/v1/channels?name=eq.' + encodeURIComponent(r.name)); } }
+}
+async function agLoadFromDB() {
+  const data = await sbGet('/rest/v1/agreements?select=*&order=entity');
+  if (!data || !data.length) return null;
+  const mapped = data.map(_mapAgreement);
+  try { localStorage.setItem(AG_LS_KEY_SB, JSON.stringify(mapped)); } catch {}
+  return mapped;
+}
+async function agSave(arr) {
+  try { localStorage.setItem(AG_LS_KEY_SB, JSON.stringify(arr)); } catch {}
+  const rows = arr.map(a => ({ entity: a.entity, entity_type: a.entityType, scope: a.scope, third_party_sync: a.thirdPartySync, renewal_date: a.renewalDate || '', status: a.status, salesforce_url: a.salesforceUrl || '', territories: a.territories || '', content_types: a.contentTypes || [], notes: a.notes || '', updated_at: new Date().toISOString() }));
+  await sbUpsert('/rest/v1/agreements', rows);
+  const existing = await sbGet('/rest/v1/agreements?select=entity');
+  if (existing) { const ne = arr.map(a => a.entity); for (const r of existing) { if (!ne.includes(r.entity)) await sbDel('/rest/v1/agreements?entity=eq.' + encodeURIComponent(r.entity)); } }
+}
+async function loadState() {
+  const data = await sbGet('/rest/v1/slate_state?id=eq.singleton&select=*');
+  if (!data || !data.length) return { favs: {}, archived: {}, edits: {}, added: [] };
+  const s = { favs: data[0].favs || {}, archived: data[0].archived || {}, edits: data[0].edits || {}, added: data[0].added || [] };
+  try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
+  return s;
+}
+async function saveState(s) {
+  try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
+  sbPatch('/rest/v1/slate_state?id=eq.singleton', { favs: s.favs, archived: s.archived, edits: s.edits, added: s.added, updated_at: new Date().toISOString() });
+}
+
+// === Two-way sync: suppress local-pull while user is actively editing ============
+let _realtimeSuppressed = false;
+let _suppressTimer = null;
+function suppressRealtime(ms) {
+  _realtimeSuppressed = true;
+  if (_suppressTimer) clearTimeout(_suppressTimer);
+  _suppressTimer = setTimeout(() => { _realtimeSuppressed = false; }, ms || 4000);
+}
+
+// === Two-way sync: poll Supabase for remote edits ================================
+let _lastChUpdatedAt = null;
+let _lastAgUpdatedAt = null;
+let _lastStUpdatedAt = null;
+
+function showSyncBadge(mode) {
+  const el = document.getElementById('sync-indicator');
+  const txt = document.getElementById('sync-text');
+  if (!el || !txt) return;
+  el.classList.add('visible');
+  if (mode === 'updated') {
+    el.classList.add('updated');
+    txt.textContent = 'Updated from team';
+    setTimeout(() => {
+      el.classList.remove('updated');
+      txt.textContent = 'Synced';
+      setTimeout(() => el.classList.remove('visible'), 1500);
+    }, 2500);
+  } else {
+    el.classList.remove('updated');
+    txt.textContent = 'Synced';
+    setTimeout(() => el.classList.remove('visible'), 1500);
+  }
+}
+
+async function pollRemoteChannels() {
+  try {
+    const d = await sbGet('/rest/v1/channels?select=updated_at&order=updated_at.desc&limit=1');
+    const newest = d && d.length ? d[0].updated_at : null;
+    if (!newest) return false;
+    if (_lastChUpdatedAt && newest === _lastChUpdatedAt) return false;
+    const first = !_lastChUpdatedAt;
+    _lastChUpdatedAt = newest;
+    if (first) return false; // first observation, just note timestamp
+    const fresh = await chLoadFromDB();
+    if (!fresh) return false;
+    channels = fresh;
+    const chTab = document.getElementById('tab-channels');
+    if (chTab && chTab.classList.contains('active')) renderChannels();
+    recomputeAllSignals();
+    if (typeof render === 'function') render();
+    updateBannerCounts();
+    return true;
+  } catch { return false; }
+}
+
+async function pollRemoteAgreements() {
+  try {
+    const d = await sbGet('/rest/v1/agreements?select=updated_at&order=updated_at.desc&limit=1');
+    const newest = d && d.length ? d[0].updated_at : null;
+    if (!newest) return false;
+    if (_lastAgUpdatedAt && newest === _lastAgUpdatedAt) return false;
+    const first = !_lastAgUpdatedAt;
+    _lastAgUpdatedAt = newest;
+    if (first) return false;
+    const fresh = await agLoadFromDB();
+    if (!fresh) return false;
+    agreements = fresh;
+    const agTab = document.getElementById('tab-agreements');
+    if (agTab && agTab.classList.contains('active')) renderAgreements();
+    recomputeAllSignals();
+    if (typeof render === 'function') render();
+    updateBannerCounts();
+    return true;
+  } catch { return false; }
+}
+
+async function pollRemoteState() {
+  try {
+    const d = await sbGet('/rest/v1/slate_state?id=eq.singleton&select=updated_at');
+    const newest = d && d.length ? d[0].updated_at : null;
+    if (!newest) return false;
+    if (_lastStUpdatedAt && newest === _lastStUpdatedAt) return false;
+    const first = !_lastStUpdatedAt;
+    _lastStUpdatedAt = newest;
+    if (first) return false;
+    const fresh = await loadState();
+    if (!fresh) return false;
+    state = fresh;
+    state.favs = state.favs || {}; state.archived = state.archived || {};
+    state.edits = state.edits || {}; state.added = state.added || [];
+    // Sync added items into items[] (additive)
+    if (state.added.length) {
+      state.added.forEach(a => {
+        if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) {
+          items.unshift({ ...a, _userAdded: true });
+        }
+      });
+    }
+    if (typeof render === 'function') render();
+    updateBannerCounts();
+    return true;
+  } catch { return false; }
+}
+
+async function pollAllRemote() {
+  if (_realtimeSuppressed) return;
+  const r1 = await pollRemoteChannels();
+  const r2 = await pollRemoteAgreements();
+  const r3 = await pollRemoteState();
+  if (r1 || r2 || r3) showSyncBadge('updated');
+}
+
+let _pollHandle = null;
+function startPolling() {
+  if (_pollHandle) clearInterval(_pollHandle);
+  _pollHandle = setInterval(pollAllRemote, 8000);
+}
+function stopPolling() {
+  if (_pollHandle) { clearInterval(_pollHandle); _pollHandle = null; }
+}
+// Pause polling when tab is hidden to save quota
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopPolling(); else { startPolling(); pollAllRemote(); }
+});
+
 // === Slate items (seed) ============================================================
 const items = [
 { source:"trade", title:"Harry Potter", genre:"scripted", network:"HBO / Max", type:"streaming", studio:"Brontë Film and TV; Warner Bros. Television", status:"renew", statusLabel:"Renewed S2", detail:"Renewed for Season 2 (Chamber of Secrets).", prod:"Pre-production.", sources:[["Deadline","https://deadline.com/2026/05/harry-potter-renewed-season-2-hbo-jon-brown-co-showrunner-1236883218/"]], dateAdded:"2026-05-06" },
@@ -529,23 +742,53 @@ function recomputeAllSignals() {
   });
 }
 recomputeAllSignals();
-window.addEventListener("storage", e => {
-  if (e.key === "slate-channels-v1" || e.key === "slate-agreements-v1") {
-    recomputeAllSignals();
-    const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
-    if (typeof render === "function") render();
-    updateBannerCounts();
+
+// === Async app init ===============================================================
+let channels = [];
+let agreements = [];
+let state = { favs: {}, archived: {}, edits: {}, added: [] };
+
+async function initApp() {
+  const chData = await chLoadFromDB();
+  if (chData) { channels = chData; } else { channels = CH_DEFAULTS.slice(); await chSave(channels); }
+  const agData = await agLoadFromDB();
+  if (agData) { agreements = agData; } else { agreements = AG_DEFAULTS.slice(); await agSave(agreements); }
+  state = await loadState();
+  state.favs = state.favs || {}; state.archived = state.archived || {};
+  state.edits = state.edits || {}; state.added = state.added || [];
+  if (state.added.length) {
+    state.added.forEach(a => { if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) items.unshift({ ...a, _userAdded: true }); });
   }
-});
-window.addEventListener("focus", () => {
   recomputeAllSignals();
-  const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
-  if (typeof render === "function") render();
+  const sb2 = document.getElementById("sortBy"); if (sb2) sortItems(sb2.value);
+  render();
   updateBannerCounts();
-});
+  switchTab((location.hash || "").replace("#","") || "slate");
+
+  // Prime polling timestamps so we don't double-fire on first cycle
+  try {
+    const r1 = await sbGet('/rest/v1/channels?select=updated_at&order=updated_at.desc&limit=1');
+    if (r1 && r1.length) _lastChUpdatedAt = r1[0].updated_at;
+    const r2 = await sbGet('/rest/v1/agreements?select=updated_at&order=updated_at.desc&limit=1');
+    if (r2 && r2.length) _lastAgUpdatedAt = r2[0].updated_at;
+    const r3 = await sbGet('/rest/v1/slate_state?id=eq.singleton&select=updated_at');
+    if (r3 && r3.length) _lastStUpdatedAt = r3[0].updated_at;
+  } catch {}
+  showSyncBadge('synced');
+  startPolling();
+}
+
+// Start: load from Supabase then render and begin polling
+(async () => {
+  const lo = document.getElementById('loading-overlay');
+  if (lo) { lo.style.display = 'flex'; }
+  await initApp();
+  if (lo) { lo.style.display = 'none'; }
+})();
+
 function updateBannerCounts() {
-  const chCount = _channelsDB().length;
-  const agCount = _agreementsDB().length;
+  const chCount = channels.length;
+  const agCount = agreements.length;
   const dbDriven = items.filter(it => it._royaltySource === "db" || it._licenseSource === "db").length;
   const el = document.getElementById("dbStatus");
   if (el) el.textContent = chCount + " channels logged · " + agCount + " agreements logged · " + dbDriven + " of " + items.length + " items pulling signals from the dashboards.";
@@ -564,34 +807,23 @@ sortItems("priority");
 
 const LAST_REFRESHED = "2026-05-07";
 const TODAY = new Date().toISOString().slice(0,10);
-
-const LS_KEY = "tv-tracker-state-v1";
-function loadState() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch(e) { return {}; } }
-function saveState(s) { try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch(e) {} }
-let state = loadState();
-state.favs = state.favs || {}; state.archived = state.archived || {};
-state.edits = state.edits || {}; state.added = state.added || [];
-
-if (state.added.length) {
-  state.added.forEach(a => { if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) items.unshift({ ...a, _userAdded: true }); });
-}
 function itemKeyOf(it) { return (it.title || "").toLowerCase().trim() + "|" + (it.source || ""); }
 function persistAdded() {
   state.added = items.filter(it => it._userAdded).map(it => {
     const { _userAdded, _royalty, _rerunProb, _covered, _musicStyle, _priority, _tier, _royaltySource, _rerunSource, _licenseSource, _licenseEntity, ...rest } = it;
     return { ...rest, _userAdded: true };
   });
-  saveState(state);
+  suppressRealtime(); saveState(state);
 }
 function itemKey(it) { return (it.title || "").toLowerCase().trim() + "|" + (it.source || ""); }
 function applyOverlay(it) { const k = itemKey(it); if (state.edits[k]) return Object.assign({}, it, state.edits[k]); return it; }
 function isFav(it) { return !!state.favs[itemKey(it)]; }
 function isArchived(it) { return !!state.archived[itemKey(it)]; }
 function isEdited(it) { return !!state.edits[itemKey(it)]; }
-function toggleFav(it) { const k = itemKey(it); if (state.favs[k]) delete state.favs[k]; else state.favs[k] = true; saveState(state); render(); }
-function toggleArchive(it) { const k = itemKey(it); if (state.archived[k]) delete state.archived[k]; else state.archived[k] = true; saveState(state); render(); }
-function saveEdit(it, fields) { const k = itemKey(it); state.edits[k] = fields; saveState(state); render(); }
-function revertEdit(it) { const k = itemKey(it); delete state.edits[k]; saveState(state); render(); }
+function toggleFav(it) { const k = itemKey(it); if (state.favs[k]) delete state.favs[k]; else state.favs[k] = true; suppressRealtime(); saveState(state); render(); }
+function toggleArchive(it) { const k = itemKey(it); if (state.archived[k]) delete state.archived[k]; else state.archived[k] = true; suppressRealtime(); saveState(state); render(); }
+function saveEdit(it, fields) { const k = itemKey(it); state.edits[k] = fields; suppressRealtime(); saveState(state); render(); }
+function revertEdit(it) { const k = itemKey(it); delete state.edits[k]; suppressRealtime(); saveState(state); render(); }
 function isNew(it) { if (!it.dateAdded) return false; return it.dateAdded === LAST_REFRESHED; }
 
 items.forEach(it => {
@@ -827,9 +1059,6 @@ document.getElementById("addShow").addEventListener("click", () => {
     const firstInput = form.querySelector("input[data-field='title']"); if (firstInput) { firstInput.focus(); firstInput.select(); } }
 });
 
-render();
-updateBannerCounts();
-
 // === Tab switching =================================================================
 function switchTab(name) {
   const valid = ["slate", "channels", "agreements"]; if (!valid.includes(name)) name = "slate";
@@ -841,7 +1070,6 @@ function switchTab(name) {
 }
 document.querySelectorAll(".proto-tabs a").forEach(a => a.addEventListener("click", e => { e.preventDefault(); switchTab(a.dataset.tab); }));
 window.addEventListener("hashchange", () => switchTab((location.hash || "").replace("#","")));
-switchTab((location.hash || "").replace("#","") || "slate");
 
 // === Channels dashboard ============================================================
 const CH_LS_KEY = "slate-channels-v1";
@@ -883,19 +1111,8 @@ const CH_DEFAULTS = [
 const CH_TYPES = ["broadcast", "cable", "streaming"];
 const CH_LEVELS = ["High", "Medium", "Low"];
 
-function chMigrate(arr) {
-  let changed = false;
-  arr.forEach(c => {
-    if (c.proTier && !c.royaltyPotential) { c.royaltyPotential = c.proTier === "A" ? "High" : c.proTier === "B" ? "Medium" : "Low"; delete c.proTier; changed = true; }
-    if (c.rerunIndex && !c.rerunProbability) { c.rerunProbability = c.rerunIndex === "high" ? "High" : c.rerunIndex === "med" ? "Medium" : "Low"; delete c.rerunIndex; changed = true; }
-  });
-  return changed;
-}
-function chLoad() { try { const stored = localStorage.getItem(CH_LS_KEY); if (stored) { const arr = JSON.parse(stored); if (chMigrate(arr)) chSave(arr); return arr; } } catch(e) {} return CH_DEFAULTS.slice(); }
-function chSave(arr) { try { localStorage.setItem(CH_LS_KEY, JSON.stringify(arr)); } catch(e) {} }
-let channels = chLoad();
 let chSearch = "";
-let chExpanded = new Set(); // track which rows are expanded (by index)
+let chExpanded = new Set();
 
 function renderChannels() {
   const term = chSearch.toLowerCase();
@@ -904,8 +1121,6 @@ function renderChannels() {
   tbody.innerHTML = visible.map(c => {
     const realIdx = channels.indexOf(c);
     const open = chExpanded.has(realIdx);
-    const summary = (c.notes||"").trim();
-    const summaryShort = summary ? (summary.length > 28 ? summary.slice(0,28) + "…" : summary) : "";
     return `
     <tr data-idx="${realIdx}">
       <td><input type="text" data-field="name" value="${esc(c.name)}" style="font-weight:600;"></td>
@@ -943,19 +1158,18 @@ function renderChannels() {
       channels[idx][field] = val;
       if (field === "royaltyPotential") e.target.className = "pot-" + val;
       if (field === "rerunProbability") e.target.className = "prob-" + val;
-      chSave(channels); chUpdateStats();
+      suppressRealtime(); chSave(channels); chUpdateStats();
       recomputeAllSignals();
       const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
       if (typeof render === "function") render();
       updateBannerCounts();
     });
-    // Also save on input for textareas to capture in-progress edits
     if (el.tagName === "TEXTAREA") {
       el.addEventListener("blur", e => {
         const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
         const field = e.target.dataset.field; if (!field) return;
         channels[idx][field] = e.target.value;
-        chSave(channels);
+        suppressRealtime(); chSave(channels);
       });
     }
   });
@@ -963,7 +1177,7 @@ function renderChannels() {
     el.addEventListener("click", () => {
       const idx = parseInt(el.dataset.idx);
       if (confirm(`Delete "${channels[idx].name}"?`)) {
-        channels.splice(idx, 1); chExpanded.clear(); chSave(channels); renderChannels();
+        channels.splice(idx, 1); chExpanded.clear(); suppressRealtime(); chSave(channels); renderChannels();
         recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
       }
     });
@@ -985,11 +1199,11 @@ function chUpdateStats() {
 }
 document.getElementById("ch-addRow").addEventListener("click", () => {
   channels.unshift({ name: "New channel", type: "cable", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "" });
-  chSave(channels); renderChannels();
+  suppressRealtime(); chSave(channels); renderChannels();
 });
 document.getElementById("ch-resetData").addEventListener("click", () => {
   if (confirm("Reset all channels to the seed defaults?")) {
-    channels = CH_DEFAULTS.slice(); chSave(channels); renderChannels();
+    channels = CH_DEFAULTS.slice(); suppressRealtime(); chSave(channels); renderChannels();
     recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
   }
 });
@@ -1038,27 +1252,6 @@ const AG_TPS_OPTIONS = ["Yes", "No", "Partial (see notes)"];
 const AG_STATUSES = ["active", "expired", "negotiating"];
 const CONTENT_TYPES = ["Promo Content", "In-Show", "Trailers", "Theme Songs", "Network IDs / Bumpers", "Recap / Stinger", "End Credits"];
 
-function agMigrate(arr) {
-  let changed = false;
-  arr.forEach(a => {
-    if (a.scope === "covered" || a.scope === "partial") { a.scope = "Yes"; changed = true; }
-    else if (a.scope === "none") { a.scope = "No"; changed = true; }
-    if (a.thirdPartySync == null) {
-      if (a.scope === "No") a.thirdPartySync = "No";
-      else if (a.entityType === "production company") a.thirdPartySync = "Partial (see notes)";
-      else a.thirdPartySync = "Yes";
-      changed = true;
-    }
-    if (a.salesforceUrl == null) { a.salesforceUrl = ""; changed = true; }
-    if (a.territories == null) { a.territories = ""; changed = true; }
-    if (!Array.isArray(a.contentTypes)) { a.contentTypes = []; changed = true; }
-    // agreementType is no longer used; we keep it in localStorage for legacy data but don't display
-  });
-  return changed;
-}
-function agLoad() { try { const stored = localStorage.getItem(AG_LS_KEY); if (stored) { const arr = JSON.parse(stored); if (agMigrate(arr)) agSave(arr); return arr; } } catch(e) {} return AG_DEFAULTS.slice(); }
-function agSave(arr) { try { localStorage.setItem(AG_LS_KEY, JSON.stringify(arr)); } catch(e) {} }
-let agreements = agLoad();
 let agSearch = "";
 let agExpanded = new Set();
 
@@ -1131,7 +1324,7 @@ function renderAgreements() {
       if (field === "scope") e.target.className = "scope-" + e.target.value;
       if (field === "status") e.target.className = "status-" + e.target.value;
       if (field === "thirdPartySync") e.target.className = tpsClass(e.target.value);
-      agSave(agreements); agUpdateStats();
+      suppressRealtime(); agSave(agreements); agUpdateStats();
       recomputeAllSignals();
       const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
       if (typeof render === "function") render();
@@ -1141,11 +1334,10 @@ function renderAgreements() {
       el.addEventListener("blur", e => {
         const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
         const field = e.target.dataset.field; if (!field) return;
-        agreements[idx][field] = e.target.value; agSave(agreements);
+        agreements[idx][field] = e.target.value; suppressRealtime(); agSave(agreements);
       });
     }
   });
-  // Content-type checkbox handling
   tbody.querySelectorAll(".ct-group").forEach(grp => {
     const idx = parseInt(grp.dataset.idx);
     grp.querySelectorAll('input[type="checkbox"]').forEach(cb => {
@@ -1154,7 +1346,7 @@ function renderAgreements() {
         if (e.target.checked) label.classList.add("checked"); else label.classList.remove("checked");
         const checked = Array.from(grp.querySelectorAll('input[type="checkbox"]:checked')).map(c => c.value);
         agreements[idx].contentTypes = checked;
-        agSave(agreements);
+        suppressRealtime(); agSave(agreements);
       });
     });
   });
@@ -1162,7 +1354,7 @@ function renderAgreements() {
     el.addEventListener("click", () => {
       const idx = parseInt(el.dataset.idx);
       if (confirm(`Delete "${agreements[idx].entity}"?`)) {
-        agreements.splice(idx, 1); agExpanded.clear(); agSave(agreements); renderAgreements();
+        agreements.splice(idx, 1); agExpanded.clear(); suppressRealtime(); agSave(agreements); renderAgreements();
         recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
       }
     });
@@ -1182,11 +1374,11 @@ function agUpdateStats() {
 }
 document.getElementById("ag-addRow").addEventListener("click", () => {
   agreements.unshift({ entity: "New entity", entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "", status: "active", salesforceUrl: "", territories: "", contentTypes: [], notes: "" });
-  agSave(agreements); renderAgreements();
+  suppressRealtime(); agSave(agreements); renderAgreements();
 });
 document.getElementById("ag-resetData").addEventListener("click", () => {
   if (confirm("Reset all agreements to the seed defaults?")) {
-    agreements = AG_DEFAULTS.slice(); agSave(agreements); renderAgreements();
+    agreements = AG_DEFAULTS.slice(); suppressRealtime(); agSave(agreements); renderAgreements();
     recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
   }
 });
@@ -1202,6 +1394,7 @@ document.getElementById("ag-exportCsv").addEventListener("click", () => {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
+
 </script>
 </body>
 </html>
