@@ -478,7 +478,7 @@ function _extractRows(r) {
 
 // Diagnostic: capture the raw shape of the first few MCP responses so we can debug
 // parsing without needing DevTools. Visible as a clickable badge in the corner.
-const _mcpDiag = { samples: [], errors: [] };
+const _mcpDiag = { samples: [], errors: [], sb: [] };
 function _logMcp(sql, raw, parsed, err) {
   if (_mcpDiag.samples.length < 6) {
     _mcpDiag.samples.push({
@@ -493,6 +493,16 @@ function _logMcp(sql, raw, parsed, err) {
     });
     _renderMcpDiagBadge();
   }
+}
+// Website fetch logger — surfaces upsert/patch/delete status into the badge
+// so we can verify on-screen that writes are actually reaching Supabase.
+function _logSb(kind, url, status, detail) {
+  try {
+    _mcpDiag.sb.push({ t: new Date().toISOString().slice(11,19), kind, url: (url||'').slice(-80), status, detail: (detail||'').slice(0,300) });
+    if (_mcpDiag.sb.length > 30) _mcpDiag.sb.shift();
+    if (typeof status === 'number' && status >= 400) console.error('[sb ' + kind + '] ' + status + ' ' + url + ' :: ' + detail);
+    _renderMcpDiagBadge();
+  } catch {}
 }
 function _renderMcpDiagBadge() {
   let badge = document.getElementById('mcp-diag-badge');
@@ -516,7 +526,14 @@ function _renderMcpDiagBadge() {
   }
   const ok = _mcpDiag.samples.filter(s => s.parsedLen != null && s.parsedLen > 0).length;
   const total = _mcpDiag.samples.length;
-  badge.textContent = 'mcp ' + ok + '/' + total + ' · tap';
+  const sbN = _mcpDiag.sb.length;
+  const sbErr = _mcpDiag.sb.filter(x => typeof x.status === 'number' && x.status >= 400 || x.status === 0).length;
+  if (typeof window !== 'undefined' && window.cowork && typeof window.cowork.callMcpTool === 'function') {
+    badge.textContent = 'mcp ' + ok + '/' + total + ' · sb ' + sbN + (sbErr ? ' ✗' + sbErr : '') + ' · tap';
+  } else {
+    badge.textContent = 'sb ' + sbN + (sbErr ? ' ✗' + sbErr : ' ok') + ' · tap';
+  }
+  if (sbErr > 0) { badge.style.background = '#fde0e0'; badge.style.color = '#a02020'; badge.style.borderColor = '#e0a0a0'; }
 }
 
 // Combined "load everything" SQL — one MCP call returns channels + agreements + state.
@@ -595,7 +612,20 @@ async function sbUpsert(path, body) {
     console.warn('sbUpsert: no MCP mapping for path', path);
     return;
   }
-  try { await fetch(SB_URL + path, { method: 'POST', headers: { ...SB_H, 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) }); } catch {}
+  // Website (fetch) path. PostgREST's `Prefer: resolution=merge-duplicates`
+  // resolves on the PRIMARY KEY by default. Our PK is `id` (uuid) but our
+  // semantic key is `name` (channels) / `entity` (agreements). Without
+  // `on_conflict=…`, the upsert tries to merge on `id`, fails, then INSERTs
+  // a fresh uuid → unique-constraint violation on name/entity → silent 409.
+  let url = SB_URL + path;
+  if (path === '/rest/v1/channels' && url.indexOf('on_conflict') < 0)        url += '?on_conflict=name';
+  else if (path === '/rest/v1/agreements' && url.indexOf('on_conflict') < 0) url += '?on_conflict=entity';
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { ...SB_H, 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) });
+    let errText = '';
+    if (!r.ok) { try { errText = await r.text(); } catch {} }
+    _logSb('upsert', url, r.status, r.ok ? 'ok' : errText);
+  } catch (e) { _logSb('upsert', url, 0, (e && e.message) || String(e)); }
 }
 
 async function sbPatch(path, body) {
@@ -609,7 +639,12 @@ async function sbPatch(path, body) {
     console.warn('sbPatch: no MCP mapping for path', path);
     return;
   }
-  try { await fetch(SB_URL + path, { method: 'PATCH', headers: { ...SB_H, 'Prefer': 'return=minimal' }, body: JSON.stringify(body) }); } catch {}
+  try {
+    const r = await fetch(SB_URL + path, { method: 'PATCH', headers: { ...SB_H, 'Prefer': 'return=minimal' }, body: JSON.stringify(body) });
+    let errText = '';
+    if (!r.ok) { try { errText = await r.text(); } catch {} }
+    _logSb('patch', SB_URL + path, r.status, r.ok ? 'ok' : errText);
+  } catch (e) { _logSb('patch', SB_URL + path, 0, (e && e.message) || String(e)); }
 }
 
 async function sbDel(path) {
@@ -623,7 +658,12 @@ async function sbDel(path) {
     }
     return;
   }
-  try { await fetch(SB_URL + path, { method: 'DELETE', headers: { ...SB_H, 'Prefer': 'return=minimal' } }); } catch {}
+  try {
+    const r = await fetch(SB_URL + path, { method: 'DELETE', headers: { ...SB_H, 'Prefer': 'return=minimal' } });
+    let errText = '';
+    if (!r.ok) { try { errText = await r.text(); } catch {} }
+    _logSb('delete', SB_URL + path, r.status, r.ok ? 'ok' : errText);
+  } catch (e) { _logSb('delete', SB_URL + path, 0, (e && e.message) || String(e)); }
 }
 
 // === Supabase data layer (fetch-based) ============================================
@@ -1056,6 +1096,9 @@ let agreements = [];
 let state = { favs: {}, archived: {}, edits: {}, added: [] };
 
 async function initApp() {
+  // Force-render the diagnostic badge so it's visible on the website from
+  // the start (it would otherwise only appear after the first MCP/fetch call).
+  try { _renderMcpDiagBadge(); } catch {}
   // In Cowork mode, do ONE combined SQL call that returns all three datasets,
   // so the user sees a single MCP approval popup on artifact open instead of three.
   if (IS_COWORK) {
