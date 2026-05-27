@@ -1588,7 +1588,22 @@ function renderChannels() {
       updateBannerCounts();
     });
     if (el.tagName === "TEXTAREA") {
+      // Debounced input-event save: flushes ~900ms after the last keystroke
+      // so polling-induced re-renders can't destroy in-flight edits before
+      // blur fires. Blur cancels the pending timer and saves immediately.
+      el.addEventListener("input", e => {
+        clearTimeout(e.target._saveTimer);
+        e.target._saveTimer = setTimeout(() => {
+          const tr = e.target.closest("tr"); if (!tr) return;
+          const idx = parseInt(tr.dataset.idx);
+          const field = e.target.dataset.field; if (!field) return;
+          if (channels[idx] && channels[idx][field] === e.target.value) return; // no change
+          channels[idx][field] = e.target.value;
+          suppressRealtime(); chSaveRow(channels[idx]);
+        }, 900);
+      });
       el.addEventListener("blur", e => {
+        clearTimeout(e.target._saveTimer);
         const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
         const field = e.target.dataset.field; if (!field) return;
         channels[idx][field] = e.target.value;
@@ -1757,7 +1772,19 @@ function renderAgreements() {
       updateBannerCounts();
     });
     if (el.tagName === "TEXTAREA") {
+      el.addEventListener("input", e => {
+        clearTimeout(e.target._saveTimer);
+        e.target._saveTimer = setTimeout(() => {
+          const tr = e.target.closest("tr"); if (!tr) return;
+          const idx = parseInt(tr.dataset.idx);
+          const field = e.target.dataset.field; if (!field) return;
+          if (agreements[idx] && agreements[idx][field] === e.target.value) return;
+          agreements[idx][field] = e.target.value;
+          suppressRealtime(); agSaveRow(agreements[idx]);
+        }, 900);
+      });
       el.addEventListener("blur", e => {
+        clearTimeout(e.target._saveTimer);
         const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
         const field = e.target.dataset.field; if (!field) return;
         agreements[idx][field] = e.target.value; suppressRealtime(); agSaveRow(agreements[idx]);
