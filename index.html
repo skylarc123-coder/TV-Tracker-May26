@@ -641,6 +641,65 @@ async function chLoadFromDB() {
   try { localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(mapped)); } catch {}
   return mapped;
 }
+// Per-row writes (used by inline edits) — touches only the changed row in Supabase.
+// Critical: keeps the artifact from clobbering teammate edits on unrelated rows.
+async function chSaveRow(c) {
+  try {
+    const all = JSON.parse(localStorage.getItem(CH_LS_KEY_SB) || '[]');
+    const idx = all.findIndex(x => x.name === c.name);
+    if (idx >= 0) all[idx] = c; else all.unshift(c);
+    localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(all));
+  } catch {}
+  if (IS_COWORK) {
+    const sql = "INSERT INTO channels (name, type, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES (" +
+      _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.royaltyPotential) + ", " + _sqlNum(c.proPayout) + ", " +
+      _sqlStr(c.rerunProbability) + ", " + _sqlStr(c.notes || '') + ", NOW()) " +
+      "ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, royalty_potential=EXCLUDED.royalty_potential, " +
+      "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, updated_at=NOW()";
+    await _mcpSql(sql);
+    return;
+  }
+  await sbUpsert('/rest/v1/channels', [{ name: c.name, type: c.type, royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }]);
+}
+async function chDeleteRow(name) {
+  try {
+    const all = JSON.parse(localStorage.getItem(CH_LS_KEY_SB) || '[]');
+    const next = all.filter(x => x.name !== name);
+    localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(next));
+  } catch {}
+  if (IS_COWORK) { await _mcpSql("DELETE FROM channels WHERE name = " + _sqlStr(name)); return; }
+  await sbDel('/rest/v1/channels?name=eq.' + encodeURIComponent(name));
+}
+async function agSaveRow(a) {
+  try {
+    const all = JSON.parse(localStorage.getItem(AG_LS_KEY_SB) || '[]');
+    const idx = all.findIndex(x => x.entity === a.entity);
+    if (idx >= 0) all[idx] = a; else all.unshift(a);
+    localStorage.setItem(AG_LS_KEY_SB, JSON.stringify(all));
+  } catch {}
+  if (IS_COWORK) {
+    const sql = "INSERT INTO agreements (entity, entity_type, scope, third_party_sync, renewal_date, status, salesforce_url, territories, content_types, notes, updated_at) VALUES (" +
+      _sqlStr(a.entity) + ", " + _sqlStr(a.entityType) + ", " + _sqlStr(a.scope) + ", " + _sqlStr(a.thirdPartySync) + ", " +
+      _sqlStr(a.renewalDate || '') + ", " + _sqlStr(a.status) + ", " + _sqlStr(a.salesforceUrl || '') + ", " +
+      _sqlStr(a.territories || '') + ", " + _sqlJson(a.contentTypes || []) + ", " + _sqlStr(a.notes || '') + ", NOW()) " +
+      "ON CONFLICT (entity) DO UPDATE SET entity_type=EXCLUDED.entity_type, scope=EXCLUDED.scope, third_party_sync=EXCLUDED.third_party_sync, " +
+      "renewal_date=EXCLUDED.renewal_date, status=EXCLUDED.status, salesforce_url=EXCLUDED.salesforce_url, " +
+      "territories=EXCLUDED.territories, content_types=EXCLUDED.content_types, notes=EXCLUDED.notes, updated_at=NOW()";
+    await _mcpSql(sql);
+    return;
+  }
+  await sbUpsert('/rest/v1/agreements', [{ entity: a.entity, entity_type: a.entityType, scope: a.scope, third_party_sync: a.thirdPartySync, renewal_date: a.renewalDate || '', status: a.status, salesforce_url: a.salesforceUrl || '', territories: a.territories || '', content_types: a.contentTypes || [], notes: a.notes || '', updated_at: new Date().toISOString() }]);
+}
+async function agDeleteRow(entity) {
+  try {
+    const all = JSON.parse(localStorage.getItem(AG_LS_KEY_SB) || '[]');
+    const next = all.filter(x => x.entity !== entity);
+    localStorage.setItem(AG_LS_KEY_SB, JSON.stringify(next));
+  } catch {}
+  if (IS_COWORK) { await _mcpSql("DELETE FROM agreements WHERE entity = " + _sqlStr(entity)); return; }
+  await sbDel('/rest/v1/agreements?entity=eq.' + encodeURIComponent(entity));
+}
+
 async function chSave(arr) {
   try { localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(arr)); } catch {}
   const rows = arr.map(c => ({ name: c.name, type: c.type, royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }));
@@ -1479,7 +1538,7 @@ function renderChannels() {
       channels[idx][field] = val;
       if (field === "royaltyPotential") e.target.className = "pot-" + val;
       if (field === "rerunProbability") e.target.className = "prob-" + val;
-      suppressRealtime(); chSave(channels); chUpdateStats();
+      suppressRealtime(); chSaveRow(channels[idx]); chUpdateStats();
       recomputeAllSignals();
       const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
       if (typeof render === "function") render();
@@ -1490,15 +1549,17 @@ function renderChannels() {
         const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
         const field = e.target.dataset.field; if (!field) return;
         channels[idx][field] = e.target.value;
-        suppressRealtime(); chSave(channels);
+        suppressRealtime(); chSaveRow(channels[idx]);
       });
     }
   });
   tbody.querySelectorAll('[data-action="ch-delete"]').forEach(el => {
     el.addEventListener("click", () => {
       const idx = parseInt(el.dataset.idx);
-      if (confirm(`Delete "${channels[idx].name}"?`)) {
-        channels.splice(idx, 1); chExpanded.clear(); suppressRealtime(); chSave(channels); renderChannels();
+      const name = channels[idx] && channels[idx].name;
+      if (confirm(`Delete "${name}"?`)) {
+        channels.splice(idx, 1); chExpanded.clear(); suppressRealtime();
+        chDeleteRow(name); renderChannels();
         recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
       }
     });
@@ -1519,8 +1580,9 @@ function chUpdateStats() {
   const b = document.getElementById("ch-bannerStats"); if (b) b.textContent = summary;
 }
 document.getElementById("ch-addRow").addEventListener("click", () => {
-  channels.unshift({ name: "New channel", type: "cable", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "" });
-  suppressRealtime(); chSave(channels); renderChannels();
+  const newRow = { name: "New channel", type: "cable", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "" };
+  channels.unshift(newRow);
+  suppressRealtime(); chSaveRow(newRow); renderChannels();
 });
 document.getElementById("ch-resetData").addEventListener("click", () => {
   if (confirm("Reset all channels to the seed defaults?")) {
@@ -1645,7 +1707,7 @@ function renderAgreements() {
       if (field === "scope") e.target.className = "scope-" + e.target.value;
       if (field === "status") e.target.className = "status-" + e.target.value;
       if (field === "thirdPartySync") e.target.className = tpsClass(e.target.value);
-      suppressRealtime(); agSave(agreements); agUpdateStats();
+      suppressRealtime(); agSaveRow(agreements[idx]); agUpdateStats();
       recomputeAllSignals();
       const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
       if (typeof render === "function") render();
@@ -1655,7 +1717,7 @@ function renderAgreements() {
       el.addEventListener("blur", e => {
         const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
         const field = e.target.dataset.field; if (!field) return;
-        agreements[idx][field] = e.target.value; suppressRealtime(); agSave(agreements);
+        agreements[idx][field] = e.target.value; suppressRealtime(); agSaveRow(agreements[idx]);
       });
     }
   });
@@ -1667,15 +1729,17 @@ function renderAgreements() {
         if (e.target.checked) label.classList.add("checked"); else label.classList.remove("checked");
         const checked = Array.from(grp.querySelectorAll('input[type="checkbox"]:checked')).map(c => c.value);
         agreements[idx].contentTypes = checked;
-        suppressRealtime(); agSave(agreements);
+        suppressRealtime(); agSaveRow(agreements[idx]);
       });
     });
   });
   tbody.querySelectorAll('[data-action="ag-delete"]').forEach(el => {
     el.addEventListener("click", () => {
       const idx = parseInt(el.dataset.idx);
-      if (confirm(`Delete "${agreements[idx].entity}"?`)) {
-        agreements.splice(idx, 1); agExpanded.clear(); suppressRealtime(); agSave(agreements); renderAgreements();
+      const entity = agreements[idx] && agreements[idx].entity;
+      if (confirm(`Delete "${entity}"?`)) {
+        agreements.splice(idx, 1); agExpanded.clear(); suppressRealtime();
+        agDeleteRow(entity); renderAgreements();
         recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
       }
     });
@@ -1694,8 +1758,9 @@ function agUpdateStats() {
   const b = document.getElementById("ag-bannerStats"); if (b) b.textContent = summary;
 }
 document.getElementById("ag-addRow").addEventListener("click", () => {
-  agreements.unshift({ entity: "New entity", entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "", status: "active", salesforceUrl: "", territories: "", contentTypes: [], notes: "" });
-  suppressRealtime(); agSave(agreements); renderAgreements();
+  const newRow = { entity: "New entity", entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "", status: "active", salesforceUrl: "", territories: "", contentTypes: [], notes: "" };
+  agreements.unshift(newRow);
+  suppressRealtime(); agSaveRow(newRow); renderAgreements();
 });
 document.getElementById("ag-resetData").addEventListener("click", () => {
   if (confirm("Reset all agreements to the seed defaults?")) {
