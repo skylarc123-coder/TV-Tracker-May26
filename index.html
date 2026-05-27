@@ -1195,10 +1195,16 @@ function persistAdded() {
   suppressRealtime(); saveState(state);
 }
 function itemKey(it) { return (it.title || "").toLowerCase().trim() + "|" + (it.source || ""); }
-function applyOverlay(it) { const k = itemKey(it); if (state.edits[k]) return Object.assign({}, it, state.edits[k]); return it; }
-function isFav(it) { return !!state.favs[itemKey(it)]; }
-function isArchived(it) { return !!state.archived[itemKey(it)]; }
-function isEdited(it) { return !!state.edits[itemKey(it)]; }
+// applyOverlay preserves the ORIGINAL key on `_origKey` so the render can use
+// it for data-key attributes. Without this, edits that change the title rename
+// the row's key, and the click handler's items.find() can no longer locate the
+// raw item by that key — Edit/Revert/Save buttons silently no-op on edited rows.
+function applyOverlay(it) { const k = itemKey(it); if (state.edits[k]) return Object.assign({}, it, state.edits[k], { _origKey: k }); return it; }
+// Prefer _origKey when present so state lookups still work on overlaid items
+// (otherwise editing a title would silently un-favorite / un-archive the row).
+function isFav(it) { return !!state.favs[it._origKey || itemKey(it)]; }
+function isArchived(it) { return !!state.archived[it._origKey || itemKey(it)]; }
+function isEdited(it) { return !!state.edits[it._origKey || itemKey(it)]; }
 function toggleFav(it) { const k = itemKey(it); if (state.favs[k]) delete state.favs[k]; else state.favs[k] = true; suppressRealtime(); saveState(state); render(); }
 function toggleArchive(it) { const k = itemKey(it); if (state.archived[k]) delete state.archived[k]; else state.archived[k] = true; suppressRealtime(); saveState(state); render(); }
 function saveEdit(it, fields) { const k = itemKey(it); state.edits[k] = fields; suppressRealtime(); saveState(state); render(); }
@@ -1271,7 +1277,10 @@ function render() {
   if (!visible.length) { list.innerHTML = '<div class="empty">No shows match these filters.</div>'; return; }
   list.innerHTML = visible.map(it => {
     const isNewItem = isNew(it); const fav = isFav(it); const archived = isArchived(it); const edited = isEdited(it);
-    const k = itemKey(it);
+    // Use _origKey if applyOverlay preserved one (i.e. this row's title was
+    // edited and itemKey(it) would now resolve to the NEW title's key, which
+    // doesn't exist in the raw items[] array). Otherwise fall back to itemKey.
+    const k = it._origKey || itemKey(it);
     const sources = (it.sources && it.sources.length) ? it.sources : [["Search Google","https://www.google.com/search?q=" + encodeURIComponent(it.title)]];
     const covered = it._covered || "Unknown";
     const reachCta = (covered === "Yes") ? `<a class="reach-cta" href="#" data-action="reach" data-key="${esc(k)}">✉ Reach Out to Contact</a>` : "";
