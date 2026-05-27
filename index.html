@@ -340,6 +340,7 @@
     <div class="dash-toolbar">
       <input type="search" id="ch-q" placeholder="Search channel name or notes…">
       <button class="btn btn-primary" id="ch-addRow">+ Add channel</button>
+      <button class="btn" id="ch-sync" title="Pull the latest team edits from Supabase">↻ Sync from team</button>
       <button class="btn" id="ch-resetData">↻ Reset to defaults</button>
       <button class="btn" id="ch-exportCsv">⤓ Export CSV</button>
     </div>
@@ -370,6 +371,7 @@
     <div class="dash-toolbar">
       <input type="search" id="ag-q" placeholder="Search entity name or notes…">
       <button class="btn btn-primary" id="ag-addRow">+ Add agreement</button>
+      <button class="btn" id="ag-sync" title="Pull the latest team edits from Supabase">↻ Sync from team</button>
       <button class="btn" id="ag-resetData">↻ Reset to defaults</button>
       <button class="btn" id="ag-exportCsv">⤓ Export CSV</button>
     </div>
@@ -1323,9 +1325,9 @@ document.getElementById("exportCsv").addEventListener("click", exportCsv);
 
 // Manual sync: one MCP call, refreshes channels+agreements+state in the artifact.
 // On the Vercel site this just kicks the existing pollAllRemote.
-document.getElementById("manualSync").addEventListener("click", async () => {
-  const btn = document.getElementById("manualSync");
-  const orig = btn.textContent; btn.disabled = true; btn.textContent = "↻ Syncing…";
+async function _doManualSync(btn) {
+  const orig = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = "↻ Syncing…"; }
   try {
     if (IS_COWORK) {
       const bundle = await _loadAllInOne();
@@ -1356,9 +1358,14 @@ document.getElementById("manualSync").addEventListener("click", async () => {
       await pollAllRemote();
     }
   } finally {
-    btn.disabled = false; btn.textContent = orig;
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
   }
-});
+}
+document.getElementById("manualSync").addEventListener("click", e => _doManualSync(e.currentTarget));
+const _chSyncBtn = document.getElementById("ch-sync");
+if (_chSyncBtn) _chSyncBtn.addEventListener("click", e => _doManualSync(e.currentTarget));
+const _agSyncBtn = document.getElementById("ag-sync");
+if (_agSyncBtn) _agSyncBtn.addEventListener("click", e => _doManualSync(e.currentTarget));
 
 document.getElementById("addShow").addEventListener("click", () => {
   const today = new Date().toISOString().slice(0,10);
