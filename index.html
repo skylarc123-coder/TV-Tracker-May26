@@ -273,6 +273,7 @@
   <div style="color:var(--muted);font-size:13px;letter-spacing:.04em;">Loading…</div>
 </div>
 
+
 <!-- Two-way sync status indicator -->
 <div id="sync-indicator">
   <span id="sync-dot"></span>
@@ -320,6 +321,7 @@
       <label class="filter-group">View <select data-filter="view"><option value="all">All Items</option><option value="favs">★ Favorites</option><option value="archived">Archived</option></select></label>
       <label class="filter-group">Sort <select id="sortBy"><option value="priority">Priority score (desc)</option><option value="status">Status (default)</option><option value="title">Title (A–Z)</option><option value="dateAdded">Date added (newest)</option></select></label>
       <button class="btn-export" id="addShow" style="margin-left:auto; background:var(--text); color:#fff; border-color:var(--text);">+ Add show</button>
+      <button class="btn-export" id="manualSync" title="Pull the latest team edits from Supabase">↻ Sync</button>
       <button class="btn-export" id="exportCsv">⤓ Export CSV</button>
     </div>
     <div class="stats" id="stats"></div>
@@ -391,20 +393,234 @@
 </div>
 
 <script>
-// === Supabase REST helpers (fetch-based, no CDN) ==================================
+// === Supabase data layer (hybrid: fetch on web, MCP bridge in Cowork artifact) ====
+// Cowork's artifact iframe has a CSP that blocks outbound fetch to supabase.co.
+// When running inside Cowork, we route every Supabase call through the Supabase MCP
+// server via window.cowork.callMcpTool. On the Vercel website, that bridge doesn't
+// exist, and we use plain fetch like before. Same file works in both places.
 const SB_URL = 'https://yhpdkoscfnsoozhyhufj.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlocGRrb3NjZm5zb296aHlodWZqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MTI3MDYsImV4cCI6MjA5NTM4ODcwNn0.r6u7sDKqskKYRD5t56Si1PwK5hQjITjCC3B3G7JNH3I';
 const SB_H = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
+const SB_PROJECT_ID = 'yhpdkoscfnsoozhyhufj';
+const SB_MCP_TOOL = 'mcp__93e82866-3f4c-4d40-847f-aa8337004b00__execute_sql';
+const IS_COWORK = typeof window !== 'undefined' && window.cowork && typeof window.cowork.callMcpTool === 'function';
+
+// SQL value helpers
+function _sqlStr(v) { if (v == null) return 'NULL'; return "'" + String(v).replace(/'/g, "''") + "'"; }
+function _sqlNum(v) { const n = parseInt(v); return isNaN(n) ? 'NULL' : String(n); }
+function _sqlJson(v) { return "'" + JSON.stringify(v == null ? null : v).replace(/'/g, "''") + "'::jsonb"; }
+
+// Robustly extract a row array from whatever shape execute_sql returns.
+// Observed Cowork bridge shape: { content: [{ type: "text", text: '{"result":"...<untrusted-data-X>[rows]</untrusted-data-X>..."}' }], isError: false }
+// The wrapper TEXT mentions the tag name once before the actual block (e.g. "within the below <untrusted-data-X> boundaries"),
+// so we have to find the LAST opening tag before the closing tag, not the first.
+function _extractRows(r) {
+  if (r == null) return null;
+  if (Array.isArray(r)) return r;
+
+  if (typeof r === 'object') {
+    if (Array.isArray(r.rows)) return r.rows;
+    if (Array.isArray(r.data)) return r.data;
+    if (Array.isArray(r.content)) {
+      for (const c of r.content) {
+        if (c && c.type === 'text' && typeof c.text === 'string') {
+          const inner = _extractRows(c.text);
+          if (inner) return inner;
+        }
+      }
+    }
+    if (typeof r.result === 'string') return _extractRows(r.result);
+    if (r.result && typeof r.result === 'object') return _extractRows(r.result);
+    return null;
+  }
+
+  if (typeof r === 'string') {
+    // Strategy A: parse the whole string as JSON — handles {"result":"..."} wrapper
+    try {
+      const v = JSON.parse(r);
+      if (Array.isArray(v)) return v;
+      if (v && typeof v === 'object') {
+        const inner = _extractRows(v);
+        if (inner) return inner;
+      }
+    } catch {}
+
+    // Strategy B: extract the LAST <untrusted-data-X>...</untrusted-data-X> block
+    const closeIdx = r.lastIndexOf('</untrusted-data');
+    if (closeIdx > 0) {
+      const before = r.slice(0, closeIdx);
+      // Walk forward through all opening tags before closeIdx; keep the last one
+      let lastOpenEnd = -1;
+      let idx = before.indexOf('<untrusted-data');
+      while (idx !== -1) {
+        const tagEnd = before.indexOf('>', idx);
+        if (tagEnd > idx) lastOpenEnd = tagEnd + 1;
+        idx = before.indexOf('<untrusted-data', idx + 1);
+      }
+      if (lastOpenEnd > 0) {
+        const inner = before.slice(lastOpenEnd).trim();
+        try { const v = JSON.parse(inner); if (Array.isArray(v)) return v; } catch {}
+      }
+    }
+
+    // Strategy C: fall back to any [...] JSON array anywhere in the string (greedy)
+    const arrMatch = r.match(/\[[\s\S]*\]/);
+    if (arrMatch) {
+      try { const v = JSON.parse(arrMatch[0]); if (Array.isArray(v)) return v; } catch {}
+    }
+    return null;
+  }
+
+  return null;
+}
+
+// Diagnostic: capture the raw shape of the first few MCP responses so we can debug
+// parsing without needing DevTools. Visible as a clickable badge in the corner.
+const _mcpDiag = { samples: [], errors: [] };
+function _logMcp(sql, raw, parsed, err) {
+  if (_mcpDiag.samples.length < 6) {
+    _mcpDiag.samples.push({
+      sql: sql.slice(0, 80),
+      rawType: typeof raw,
+      rawIsArray: Array.isArray(raw),
+      rawKeys: (raw && typeof raw === 'object' && !Array.isArray(raw)) ? Object.keys(raw).slice(0,8) : null,
+      rawSample: typeof raw === 'string' ? raw.slice(0, 300) : JSON.stringify(raw).slice(0, 300),
+      parsedLen: Array.isArray(parsed) ? parsed.length : null,
+      parsedSample: Array.isArray(parsed) && parsed.length ? JSON.stringify(parsed[0]).slice(0,200) : null,
+      err: err ? (err.message || String(err)) : null
+    });
+    _renderMcpDiagBadge();
+  }
+}
+function _renderMcpDiagBadge() {
+  let badge = document.getElementById('mcp-diag-badge');
+  if (!badge) {
+    badge = document.createElement('div');
+    badge.id = 'mcp-diag-badge';
+    badge.style.cssText = 'position:fixed;bottom:14px;left:14px;z-index:998;padding:6px 12px;border-radius:18px;background:#e3eef9;color:#1f5fa8;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border:1px solid #b7cce4;cursor:pointer;user-select:none;font-family:ui-monospace,Menlo,monospace;';
+    badge.onclick = () => {
+      const blob = JSON.stringify(_mcpDiag, null, 2);
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'position:fixed;inset:40px;background:#fff;border:2px solid #1f5fa8;border-radius:8px;padding:14px;z-index:1001;overflow:auto;font-size:11px;line-height:1.5;font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-all;';
+      pre.textContent = blob;
+      const closer = document.createElement('button');
+      closer.textContent = '× close';
+      closer.style.cssText = 'position:absolute;top:8px;right:8px;padding:4px 10px;background:#1f5fa8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;';
+      closer.onclick = () => pre.remove();
+      pre.appendChild(closer);
+      document.body.appendChild(pre);
+    };
+    document.body.appendChild(badge);
+  }
+  const ok = _mcpDiag.samples.filter(s => s.parsedLen != null && s.parsedLen > 0).length;
+  const total = _mcpDiag.samples.length;
+  badge.textContent = 'mcp ' + ok + '/' + total + ' · tap';
+}
+
+// Combined "load everything" SQL — one MCP call returns channels + agreements + state.
+// Used in Cowork mode to keep the artifact's MCP popups to ONE per open.
+async function _loadAllInOne() {
+  if (!IS_COWORK) return null;
+  const sql = "SELECT json_build_object(" +
+    "'channels', (SELECT json_agg(c.*) FROM (SELECT * FROM channels ORDER BY name) c), " +
+    "'agreements', (SELECT json_agg(a.*) FROM (SELECT * FROM agreements ORDER BY entity) a), " +
+    "'state', (SELECT row_to_json(s.*) FROM slate_state s WHERE id = 'singleton')" +
+  ") AS bundle";
+  const rows = await _mcpSql(sql);
+  if (!rows || !rows.length) return null;
+  const b = rows[0] && rows[0].bundle;
+  if (!b) return null;
+  return b;
+}
+
+async function _mcpSql(sql) {
+  if (!IS_COWORK) return null;
+  let raw = null, parsed = null;
+  try {
+    raw = await window.cowork.callMcpTool(SB_MCP_TOOL, { project_id: SB_PROJECT_ID, query: sql });
+    parsed = _extractRows(raw);
+    _logMcp(sql, raw, parsed, null);
+    return parsed || [];
+  } catch (e) {
+    console.error('mcpSql failed:', e, 'sql:', sql);
+    _logMcp(sql, raw, null, e);
+    return null;
+  }
+}
+
 async function sbGet(path) {
+  if (IS_COWORK) {
+    if (path === '/rest/v1/channels?select=*&order=name')                              return await _mcpSql('SELECT * FROM channels ORDER BY name');
+    if (path === '/rest/v1/channels?select=name')                                      return await _mcpSql('SELECT name FROM channels');
+    if (path === '/rest/v1/channels?select=updated_at&order=updated_at.desc&limit=1')  return await _mcpSql('SELECT updated_at FROM channels ORDER BY updated_at DESC NULLS LAST LIMIT 1');
+    if (path === '/rest/v1/agreements?select=*&order=entity')                          return await _mcpSql('SELECT * FROM agreements ORDER BY entity');
+    if (path === '/rest/v1/agreements?select=entity')                                  return await _mcpSql('SELECT entity FROM agreements');
+    if (path === '/rest/v1/agreements?select=updated_at&order=updated_at.desc&limit=1')return await _mcpSql('SELECT updated_at FROM agreements ORDER BY updated_at DESC NULLS LAST LIMIT 1');
+    if (path === '/rest/v1/slate_state?id=eq.singleton&select=*')                      return await _mcpSql("SELECT * FROM slate_state WHERE id = 'singleton'");
+    if (path === '/rest/v1/slate_state?id=eq.singleton&select=updated_at')              return await _mcpSql("SELECT updated_at FROM slate_state WHERE id = 'singleton'");
+    console.warn('sbGet: no MCP mapping for path', path);
+    return null;
+  }
   try { const r = await fetch(SB_URL + path, { headers: SB_H }); return r.ok ? r.json() : null; } catch { return null; }
 }
+
 async function sbUpsert(path, body) {
+  if (IS_COWORK) {
+    if (!body || !body.length) return;
+    if (path === '/rest/v1/channels') {
+      // Build a single multi-VALUES upsert so this is ONE MCP call instead of N.
+      const tuples = body.map(c => "(" +
+        _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
+        _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", NOW())").join(", ");
+      const sql = "INSERT INTO channels (name, type, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES " + tuples +
+        " ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, royalty_potential=EXCLUDED.royalty_potential, " +
+        "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, updated_at=NOW()";
+      await _mcpSql(sql);
+      return;
+    }
+    if (path === '/rest/v1/agreements') {
+      const tuples = body.map(a => "(" +
+        _sqlStr(a.entity) + ", " + _sqlStr(a.entity_type) + ", " + _sqlStr(a.scope) + ", " + _sqlStr(a.third_party_sync) + ", " +
+        _sqlStr(a.renewal_date || '') + ", " + _sqlStr(a.status) + ", " + _sqlStr(a.salesforce_url || '') + ", " +
+        _sqlStr(a.territories || '') + ", " + _sqlJson(a.content_types) + ", " + _sqlStr(a.notes || '') + ", NOW())").join(", ");
+      const sql = "INSERT INTO agreements (entity, entity_type, scope, third_party_sync, renewal_date, status, salesforce_url, territories, content_types, notes, updated_at) VALUES " + tuples +
+        " ON CONFLICT (entity) DO UPDATE SET entity_type=EXCLUDED.entity_type, scope=EXCLUDED.scope, third_party_sync=EXCLUDED.third_party_sync, " +
+        "renewal_date=EXCLUDED.renewal_date, status=EXCLUDED.status, salesforce_url=EXCLUDED.salesforce_url, " +
+        "territories=EXCLUDED.territories, content_types=EXCLUDED.content_types, notes=EXCLUDED.notes, updated_at=NOW()";
+      await _mcpSql(sql);
+      return;
+    }
+    console.warn('sbUpsert: no MCP mapping for path', path);
+    return;
+  }
   try { await fetch(SB_URL + path, { method: 'POST', headers: { ...SB_H, 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) }); } catch {}
 }
+
 async function sbPatch(path, body) {
+  if (IS_COWORK) {
+    if (path === '/rest/v1/slate_state?id=eq.singleton') {
+      const sql = "UPDATE slate_state SET favs = " + _sqlJson(body.favs) + ", archived = " + _sqlJson(body.archived) +
+        ", edits = " + _sqlJson(body.edits) + ", added = " + _sqlJson(body.added) + ", updated_at = NOW() WHERE id = 'singleton'";
+      await _mcpSql(sql);
+      return;
+    }
+    console.warn('sbPatch: no MCP mapping for path', path);
+    return;
+  }
   try { await fetch(SB_URL + path, { method: 'PATCH', headers: { ...SB_H, 'Prefer': 'return=minimal' }, body: JSON.stringify(body) }); } catch {}
 }
+
 async function sbDel(path) {
+  if (IS_COWORK) {
+    const m = path.match(/^\/rest\/v1\/(channels|agreements)\?(name|entity)=eq\.(.+)$/);
+    if (m) {
+      const table = m[1]; const col = m[2]; const val = decodeURIComponent(m[3]);
+      await _mcpSql("DELETE FROM " + table + " WHERE " + col + " = " + _sqlStr(val));
+    } else {
+      console.warn('sbDel: no MCP mapping for path', path);
+    }
+    return;
+  }
   try { await fetch(SB_URL + path, { method: 'DELETE', headers: { ...SB_H, 'Prefer': 'return=minimal' } }); } catch {}
 }
 
@@ -426,6 +642,20 @@ async function chLoadFromDB() {
 async function chSave(arr) {
   try { localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(arr)); } catch {}
   const rows = arr.map(c => ({ name: c.name, type: c.type, royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }));
+  if (IS_COWORK) {
+    // ONE call: upsert all known names + delete any row whose name isn't in this snapshot.
+    if (!rows.length) return;
+    const tuples = rows.map(c => "(" +
+      _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
+      _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", NOW())").join(", ");
+    const nameList = rows.map(c => _sqlStr(c.name)).join(", ");
+    const sql = "INSERT INTO channels (name, type, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES " + tuples +
+      " ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, royalty_potential=EXCLUDED.royalty_potential, " +
+      "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, updated_at=NOW(); " +
+      "DELETE FROM channels WHERE name NOT IN (" + nameList + ")";
+    await _mcpSql(sql);
+    return;
+  }
   await sbUpsert('/rest/v1/channels', rows);
   const existing = await sbGet('/rest/v1/channels?select=name');
   if (existing) { const nn = arr.map(c => c.name); for (const r of existing) { if (!nn.includes(r.name)) await sbDel('/rest/v1/channels?name=eq.' + encodeURIComponent(r.name)); } }
@@ -440,6 +670,21 @@ async function agLoadFromDB() {
 async function agSave(arr) {
   try { localStorage.setItem(AG_LS_KEY_SB, JSON.stringify(arr)); } catch {}
   const rows = arr.map(a => ({ entity: a.entity, entity_type: a.entityType, scope: a.scope, third_party_sync: a.thirdPartySync, renewal_date: a.renewalDate || '', status: a.status, salesforce_url: a.salesforceUrl || '', territories: a.territories || '', content_types: a.contentTypes || [], notes: a.notes || '', updated_at: new Date().toISOString() }));
+  if (IS_COWORK) {
+    if (!rows.length) return;
+    const tuples = rows.map(a => "(" +
+      _sqlStr(a.entity) + ", " + _sqlStr(a.entity_type) + ", " + _sqlStr(a.scope) + ", " + _sqlStr(a.third_party_sync) + ", " +
+      _sqlStr(a.renewal_date || '') + ", " + _sqlStr(a.status) + ", " + _sqlStr(a.salesforce_url || '') + ", " +
+      _sqlStr(a.territories || '') + ", " + _sqlJson(a.content_types) + ", " + _sqlStr(a.notes || '') + ", NOW())").join(", ");
+    const nameList = rows.map(a => _sqlStr(a.entity)).join(", ");
+    const sql = "INSERT INTO agreements (entity, entity_type, scope, third_party_sync, renewal_date, status, salesforce_url, territories, content_types, notes, updated_at) VALUES " + tuples +
+      " ON CONFLICT (entity) DO UPDATE SET entity_type=EXCLUDED.entity_type, scope=EXCLUDED.scope, third_party_sync=EXCLUDED.third_party_sync, " +
+      "renewal_date=EXCLUDED.renewal_date, status=EXCLUDED.status, salesforce_url=EXCLUDED.salesforce_url, " +
+      "territories=EXCLUDED.territories, content_types=EXCLUDED.content_types, notes=EXCLUDED.notes, updated_at=NOW(); " +
+      "DELETE FROM agreements WHERE entity NOT IN (" + nameList + ")";
+    await _mcpSql(sql);
+    return;
+  }
   await sbUpsert('/rest/v1/agreements', rows);
   const existing = await sbGet('/rest/v1/agreements?select=entity');
   if (existing) { const ne = arr.map(a => a.entity); for (const r of existing) { if (!ne.includes(r.entity)) await sbDel('/rest/v1/agreements?entity=eq.' + encodeURIComponent(r.entity)); } }
@@ -576,8 +821,9 @@ function startPolling() {
 function stopPolling() {
   if (_pollHandle) { clearInterval(_pollHandle); _pollHandle = null; }
 }
-// Pause polling when tab is hidden to save quota
+// Pause polling when tab is hidden (website only — Cowork artifact doesn't poll)
 document.addEventListener('visibilitychange', () => {
+  if (IS_COWORK) return;
   if (document.hidden) stopPolling(); else { startPolling(); pollAllRemote(); }
 });
 
@@ -749,11 +995,36 @@ let agreements = [];
 let state = { favs: {}, archived: {}, edits: {}, added: [] };
 
 async function initApp() {
-  const chData = await chLoadFromDB();
-  if (chData) { channels = chData; } else { channels = CH_DEFAULTS.slice(); await chSave(channels); }
-  const agData = await agLoadFromDB();
-  if (agData) { agreements = agData; } else { agreements = AG_DEFAULTS.slice(); await agSave(agreements); }
-  state = await loadState();
+  // In Cowork mode, do ONE combined SQL call that returns all three datasets,
+  // so the user sees a single MCP approval popup on artifact open instead of three.
+  if (IS_COWORK) {
+    const bundle = await _loadAllInOne();
+    if (bundle) {
+      channels = (bundle.channels || []).map(_mapChannel);
+      agreements = (bundle.agreements || []).map(_mapAgreement);
+      const s = bundle.state;
+      if (s) {
+        state = { favs: s.favs || {}, archived: s.archived || {}, edits: s.edits || {}, added: s.added || [] };
+      }
+      try {
+        localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(channels));
+        localStorage.setItem(AG_LS_KEY_SB, JSON.stringify(agreements));
+        localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(state));
+      } catch {}
+    } else {
+      console.warn('[sync] _loadAllInOne returned no data; not seeding to protect remote state.');
+      channels = []; agreements = [];
+    }
+  } else {
+    const chData = await chLoadFromDB();
+    if (chData) { channels = chData; } else { channels = CH_DEFAULTS.slice(); await chSave(channels); }
+    const agData = await agLoadFromDB();
+    if (agData) { agreements = agData; } else { agreements = AG_DEFAULTS.slice(); await agSave(agreements); }
+  }
+  // In Cowork mode, state is already populated by _loadAllInOne above.
+  if (!IS_COWORK) {
+    state = await loadState();
+  }
   state.favs = state.favs || {}; state.archived = state.archived || {};
   state.edits = state.edits || {}; state.added = state.added || [];
   if (state.added.length) {
@@ -765,17 +1036,21 @@ async function initApp() {
   updateBannerCounts();
   switchTab((location.hash || "").replace("#","") || "slate");
 
-  // Prime polling timestamps so we don't double-fire on first cycle
-  try {
-    const r1 = await sbGet('/rest/v1/channels?select=updated_at&order=updated_at.desc&limit=1');
-    if (r1 && r1.length) _lastChUpdatedAt = r1[0].updated_at;
-    const r2 = await sbGet('/rest/v1/agreements?select=updated_at&order=updated_at.desc&limit=1');
-    if (r2 && r2.length) _lastAgUpdatedAt = r2[0].updated_at;
-    const r3 = await sbGet('/rest/v1/slate_state?id=eq.singleton&select=updated_at');
-    if (r3 && r3.length) _lastStUpdatedAt = r3[0].updated_at;
-  } catch {}
   showSyncBadge('synced');
-  startPolling();
+  // In the website, automatic polling pulls teammate edits every 8s.
+  // In the Cowork artifact, polling would trigger an MCP approval popup on every
+  // call, so we DON'T auto-poll there — the user clicks the "↻ Sync" button to pull.
+  if (!IS_COWORK) {
+    try {
+      const r1 = await sbGet('/rest/v1/channels?select=updated_at&order=updated_at.desc&limit=1');
+      if (r1 && r1.length) _lastChUpdatedAt = r1[0].updated_at;
+      const r2 = await sbGet('/rest/v1/agreements?select=updated_at&order=updated_at.desc&limit=1');
+      if (r2 && r2.length) _lastAgUpdatedAt = r2[0].updated_at;
+      const r3 = await sbGet('/rest/v1/slate_state?id=eq.singleton&select=updated_at');
+      if (r3 && r3.length) _lastStUpdatedAt = r3[0].updated_at;
+    } catch {}
+    startPolling();
+  }
 }
 
 // Start: load from Supabase then render and begin polling
@@ -1045,6 +1320,45 @@ function exportCsv() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 document.getElementById("exportCsv").addEventListener("click", exportCsv);
+
+// Manual sync: one MCP call, refreshes channels+agreements+state in the artifact.
+// On the Vercel site this just kicks the existing pollAllRemote.
+document.getElementById("manualSync").addEventListener("click", async () => {
+  const btn = document.getElementById("manualSync");
+  const orig = btn.textContent; btn.disabled = true; btn.textContent = "↻ Syncing…";
+  try {
+    if (IS_COWORK) {
+      const bundle = await _loadAllInOne();
+      if (bundle) {
+        if (Array.isArray(bundle.channels)) channels = bundle.channels.map(_mapChannel);
+        if (Array.isArray(bundle.agreements)) agreements = bundle.agreements.map(_mapAgreement);
+        if (bundle.state) {
+          const s = bundle.state;
+          state = { favs: s.favs || {}, archived: s.archived || {}, edits: s.edits || {}, added: s.added || [] };
+        }
+        try {
+          localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(channels));
+          localStorage.setItem(AG_LS_KEY_SB, JSON.stringify(agreements));
+          localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(state));
+        } catch {}
+        recomputeAllSignals();
+        const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
+        render(); updateBannerCounts();
+        const chTab = document.getElementById("tab-channels");
+        const agTab = document.getElementById("tab-agreements");
+        if (chTab && chTab.classList.contains("active")) renderChannels();
+        if (agTab && agTab.classList.contains("active")) renderAgreements();
+        showSyncBadge('updated');
+      } else {
+        alert("Sync returned no data. Check the diagnostic badge in the bottom-left for details.");
+      }
+    } else {
+      await pollAllRemote();
+    }
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+});
 
 document.getElementById("addShow").addEventListener("click", () => {
   const today = new Date().toISOString().slice(0,10);
