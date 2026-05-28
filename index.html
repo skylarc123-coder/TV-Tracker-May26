@@ -543,6 +543,7 @@ async function _loadAllInOne() {
   const sql = "SELECT json_build_object(" +
     "'channels', (SELECT json_agg(c.*) FROM (SELECT * FROM channels ORDER BY name) c), " +
     "'agreements', (SELECT json_agg(a.*) FROM (SELECT * FROM agreements ORDER BY entity) a), " +
+    "'items', (SELECT json_agg(i.*) FROM (SELECT * FROM slate_items ORDER BY date_added DESC NULLS LAST, title) i), " +
     "'state', (SELECT row_to_json(s.*) FROM slate_state s WHERE id = 'singleton')" +
   ") AS bundle";
   const rows = await _mcpSql(sql);
@@ -577,6 +578,8 @@ async function sbGet(path) {
     if (path === '/rest/v1/agreements?select=updated_at&order=updated_at.desc&limit=1')return await _mcpSql('SELECT updated_at FROM agreements ORDER BY updated_at DESC NULLS LAST LIMIT 1');
     if (path === '/rest/v1/slate_state?id=eq.singleton&select=*')                      return await _mcpSql("SELECT * FROM slate_state WHERE id = 'singleton'");
     if (path === '/rest/v1/slate_state?id=eq.singleton&select=updated_at')              return await _mcpSql("SELECT updated_at FROM slate_state WHERE id = 'singleton'");
+    if (path === '/rest/v1/slate_items?select=*&order=date_added.desc.nullslast,title.asc')  return await _mcpSql("SELECT * FROM slate_items ORDER BY date_added DESC NULLS LAST, title");
+    if (path === '/rest/v1/slate_items?select=updated_at&order=updated_at.desc&limit=1') return await _mcpSql("SELECT updated_at FROM slate_items ORDER BY updated_at DESC NULLS LAST LIMIT 1");
     console.warn('sbGet: no MCP mapping for path', path);
     return null;
   }
@@ -673,6 +676,69 @@ const ST_LS_KEY_SB = 'tv-tracker-state-v1';
 
 function _mapChannel(c) { return { name: c.name, type: c.type, royaltyPotential: c.royalty_potential, proPayout: c.pro_payout, rerunProbability: c.rerun_probability, notes: c.notes || '' }; }
 function _mapAgreement(a) { return { entity: a.entity, entityType: a.entity_type, scope: a.scope, thirdPartySync: a.third_party_sync, renewalDate: a.renewal_date || '', status: a.status, salesforceUrl: a.salesforce_url || '', territories: a.territories || '', contentTypes: Array.isArray(a.content_types) ? a.content_types : [], notes: a.notes || '' }; }
+function _mapItem(r) {
+  return {
+    source: r.source || 'trade',
+    title: r.title || '',
+    network: r.network || '',
+    type: r.type || 'streaming',
+    genre: r.genre || 'scripted',
+    studio: r.studio || '',
+    status: r.status || 'renew',
+    statusLabel: r.status_label || '',
+    detail: r.detail || '',
+    prod: r.prod || '',
+    sources: Array.isArray(r.sources) ? r.sources : [],
+    dateAdded: r.date_added || ''
+  };
+}
+function _itemId(it) { return (it.title || '').toLowerCase().trim() + '|' + (it.source || 'trade'); }
+
+async function slSaveItem(it) {
+  const id = _itemId(it);
+  if (IS_COWORK) {
+    const sql = "INSERT INTO slate_items (id, source, title, network, type, genre, studio, status, status_label, detail, prod, sources, date_added, updated_at) VALUES (" +
+      _sqlStr(id) + ", " + _sqlStr(it.source || 'trade') + ", " + _sqlStr(it.title || '') + ", " +
+      _sqlStr(it.network || '') + ", " + _sqlStr(it.type || 'streaming') + ", " + _sqlStr(it.genre || 'scripted') + ", " +
+      _sqlStr(it.studio || '') + ", " + _sqlStr(it.status || 'renew') + ", " + _sqlStr(it.statusLabel || '') + ", " +
+      _sqlStr(it.detail || '') + ", " + _sqlStr(it.prod || '') + ", " + _sqlJson(it.sources || []) + ", " +
+      _sqlStr(it.dateAdded || '') + ", NOW()) " +
+      "ON CONFLICT (id) DO UPDATE SET source=EXCLUDED.source, title=EXCLUDED.title, network=EXCLUDED.network, " +
+      "type=EXCLUDED.type, genre=EXCLUDED.genre, studio=EXCLUDED.studio, status=EXCLUDED.status, " +
+      "status_label=EXCLUDED.status_label, detail=EXCLUDED.detail, prod=EXCLUDED.prod, " +
+      "sources=EXCLUDED.sources, date_added=EXCLUDED.date_added, updated_at=NOW()";
+    await _mcpSql(sql);
+    return;
+  }
+  const body = [{
+    id: id, source: it.source || 'trade', title: it.title || '', network: it.network || '',
+    type: it.type || 'streaming', genre: it.genre || 'scripted', studio: it.studio || '',
+    status: it.status || 'renew', status_label: it.statusLabel || '',
+    detail: it.detail || '', prod: it.prod || '', sources: it.sources || [],
+    date_added: it.dateAdded || '', updated_at: new Date().toISOString()
+  }];
+  const url = SB_URL + '/rest/v1/slate_items?on_conflict=id';
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { ...SB_H, 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) });
+    let errText = ''; if (!r.ok) { try { errText = await r.text(); } catch {} }
+    _logSb('upsert-item', url, r.status, r.ok ? 'ok' : errText);
+  } catch (e) { _logSb('upsert-item', url, 0, (e && e.message) || String(e)); }
+}
+async function slDeleteItem(it) {
+  const id = _itemId(it);
+  if (IS_COWORK) { await _mcpSql("DELETE FROM slate_items WHERE id = " + _sqlStr(id)); return; }
+  const url = SB_URL + '/rest/v1/slate_items?id=eq.' + encodeURIComponent(id);
+  try {
+    const r = await fetch(url, { method: 'DELETE', headers: { ...SB_H, 'Prefer': 'return=minimal' } });
+    let errText = ''; if (!r.ok) { try { errText = await r.text(); } catch {} }
+    _logSb('delete-item', url, r.status, r.ok ? 'ok' : errText);
+  } catch (e) { _logSb('delete-item', url, 0, (e && e.message) || String(e)); }
+}
+async function slLoadFromDB() {
+  const data = await sbGet('/rest/v1/slate_items?select=*&order=date_added.desc.nullslast,title.asc');
+  if (!data) return null;
+  return data.map(_mapItem);
+}
 
 async function chLoadFromDB() {
   const data = await sbGet('/rest/v1/channels?select=*&order=name');
@@ -792,8 +858,8 @@ async function agSave(arr) {
 }
 async function loadState() {
   const data = await sbGet('/rest/v1/slate_state?id=eq.singleton&select=*');
-  if (!data || !data.length) return { favs: {}, archived: {}, edits: {}, added: [] };
-  const s = { favs: data[0].favs || {}, archived: data[0].archived || {}, edits: data[0].edits || {}, added: data[0].added || [] };
+  if (!data || !data.length) return { favs: {}, archived: {}, edits: {}, added: [], last_refreshed: LAST_REFRESHED };
+  const s = { favs: data[0].favs || {}, archived: data[0].archived || {}, edits: data[0].edits || {}, added: data[0].added || [], last_refreshed: data[0].last_refreshed || LAST_REFRESHED };
   try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
   return s;
 }
@@ -906,12 +972,32 @@ async function pollRemoteState() {
   } catch { return false; }
 }
 
+let _lastItUpdatedAt = null;
+async function pollRemoteItems() {
+  try {
+    const d = await sbGet('/rest/v1/slate_items?select=updated_at&order=updated_at.desc&limit=1');
+    const newest = d && d.length ? d[0].updated_at : null;
+    if (!newest) return false;
+    if (_lastItUpdatedAt && newest === _lastItUpdatedAt) return false;
+    const first = !_lastItUpdatedAt;
+    _lastItUpdatedAt = newest;
+    if (first) return false;
+    const fresh = await slLoadFromDB();
+    if (!fresh) return false;
+    items = fresh;
+    recomputeAllSignals();
+    const sb = document.getElementById('sortBy'); if (sb) sortItems(sb.value);
+    if (typeof render === 'function') render();
+    return true;
+  } catch { return false; }
+}
 async function pollAllRemote() {
   if (_realtimeSuppressed) return;
   const r1 = await pollRemoteChannels();
   const r2 = await pollRemoteAgreements();
   const r3 = await pollRemoteState();
-  if (r1 || r2 || r3) showSyncBadge('updated');
+  const r4 = await pollRemoteItems();
+  if (r1 || r2 || r3 || r4) showSyncBadge('updated');
 }
 
 let _pollHandle = null;
@@ -929,62 +1015,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // === Slate items (seed) ============================================================
-const items = [
-{ source:"trade", title:"Harry Potter", genre:"scripted", network:"HBO / Max", type:"streaming", studio:"Brontë Film and TV; Warner Bros. Television", status:"renew", statusLabel:"Renewed S2", detail:"Renewed for Season 2 (Chamber of Secrets).", prod:"Pre-production.", sources:[["Deadline","https://deadline.com/2026/05/harry-potter-renewed-season-2-hbo-jon-brown-co-showrunner-1236883218/"]], dateAdded:"2026-05-06" },
-{ source:"trade", title:"The Fall and Rise of Reggie Dinkins", genre:"scripted", network:"NBC", type:"broadcast", studio:"Universal Television; Little Stranger", status:"renew", statusLabel:"Renewed S2", detail:"Tracy Morgan & Daniel Radcliffe sports mockumentary picked up for S2.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Adults", genre:"scripted", network:"FX", type:"cable", studio:"FX Productions", status:"renew", statusLabel:"Renewed S2", detail:"FX comedy renewed for a second season.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Alien: Earth", genre:"scripted", network:"FX", type:"cable", studio:"FX Productions; 20th Television", status:"renew", statusLabel:"Renewed S2", detail:"Noah Hawley sci-fi series renewed for a second season.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Interview with the Vampire", genre:"scripted", network:"AMC", type:"cable", studio:"AMC Studios", status:"renew", statusLabel:"Renewed S3", detail:"Anne Rice adaptation continuing into a third season.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Below Deck", genre:"unscripted", network:"Bravo", type:"cable", studio:"51 Minds Entertainment", status:"renew", statusLabel:"Renewed S13", detail:"Season 13 confirmed.", prod:"In production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Below Deck Mediterranean", genre:"unscripted", network:"Bravo", type:"cable", studio:"51 Minds Entertainment", status:"renew", statusLabel:"Renewed S11", detail:"Med-set yachting franchise returns.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Married to Medicine", genre:"unscripted", network:"Bravo", type:"cable", studio:"Purveyors of Pop / Fremantle", status:"renew", statusLabel:"Renewed S11", detail:"Atlanta-set medical reality franchise renewed.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"The Real Housewives (NJ, NYC, OC, Potomac, SLC)", genre:"unscripted", network:"Bravo", type:"cable", studio:"Sirens Media; Shed Media; Purveyors of Pop", status:"renew", statusLabel:"Renewed", detail:"Five Real Housewives flagships renewed.", prod:"Mixed — NJ and OC in production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Canada Shore", genre:"unscripted", network:"MTV", type:"cable", studio:"495 Productions", status:"renew", statusLabel:"Renewed S2", detail:"Jersey Shore franchise extension picked up.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Brilliant Minds", genre:"scripted", network:"NBC", type:"broadcast", studio:"Warner Bros. Television; Universal Television", status:"cancel", statusLabel:"Canceled", detail:"Zachary Quinto medical drama canceled after 2 seasons.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Stumble", genre:"scripted", network:"NBC", type:"broadcast", studio:"Universal Television", status:"cancel", statusLabel:"Canceled", detail:"Cheerleading mockumentary canceled after S1.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Going Dutch", genre:"scripted", network:"Fox", type:"broadcast", studio:"Fox Entertainment Studios", status:"cancel", statusLabel:"Canceled", detail:"Denis Leary military comedy canceled after 2 seasons.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Star Search", genre:"unscripted", network:"Netflix", type:"streaming", studio:"Mark Burnett / MGM Alternative", status:"cancel", statusLabel:"Canceled", detail:"Talent-competition reboot canceled after a single season.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"The Old Man", genre:"scripted", network:"FX", type:"cable", studio:"20th Television; FX Productions", status:"cancel", statusLabel:"Canceled", detail:"Jeff Bridges-led spy thriller canceled.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Orphan Black: Echoes", genre:"scripted", network:"AMC", type:"cable", studio:"Boat Rocker Studios; AMC Studios", status:"cancel", statusLabel:"Canceled", detail:"Spinoff of Orphan Black canceled after one season.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"DMV", genre:"scripted", network:"CBS", type:"broadcast", studio:"CBS Studios", status:"cancel", statusLabel:"Canceled", detail:"First-year comedy canceled.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"The Neighborhood", genre:"scripted", network:"CBS", type:"broadcast", studio:"CBS Studios", status:"cancel", statusLabel:"Ending", detail:"Cedric the Entertainer-led comedy ending.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Watson", genre:"scripted", network:"CBS", type:"broadcast", studio:"CBS Studios", status:"cancel", statusLabel:"Canceled", detail:"Morris Chestnut-led Sherlock spinoff canceled.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"The Night Agent", genre:"scripted", network:"Netflix", type:"streaming", studio:"Sony Pictures Television", status:"cancel", statusLabel:"Ending S4", detail:"Action thriller to conclude with S4.", prod:"In production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Jersey Shore: Family Vacation", genre:"unscripted", network:"MTV", type:"cable", studio:"495 Productions", status:"cancel", statusLabel:"Ending S9", detail:"Final 18 episodes closing out the franchise.", prod:"Post-production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Sunset P.I.", genre:"scripted", network:"NBC (pilot)", type:"broadcast", studio:"Universal Television; 3 Arts", status:"pickup", statusLabel:"Pilot Buzz", detail:"Jake Johnson single-cam comedy frontrunner.", prod:"Pilot shot.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"The Rockford Files (reboot)", genre:"scripted", network:"NBC (pilot)", type:"broadcast", studio:"Universal Television", status:"pickup", statusLabel:"Pilot Buzz", detail:"David Boreanaz-led reboot.", prod:"Pilot shot.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"90 Day Fiancé (Season 10)", genre:"unscripted", network:"TLC", type:"cable", studio:"Sharp Entertainment", status:"wrapped", statusLabel:"Wrapped Apr '26", detail:"Crew listings show segment producers wrapping 3/26–4/26.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"The Real Housewives of Atlanta (Season 17)", genre:"unscripted", network:"Bravo", type:"cable", studio:"True Entertainment / NBCUniversal", status:"wrapped", statusLabel:"Wrapped Apr '26", detail:"Editor credits run 9/25–4/26.", prod:"In post.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"Project Runway (Season 22)", genre:"unscripted", network:"Disney/Freeform", type:"cable", studio:"Bunim/Murray Productions", status:"wrapped", statusLabel:"Wrapped Apr '26", detail:"Season finished principal.", prod:"In post.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"Pawn Stars (Season 20)", genre:"unscripted", network:"History", type:"cable", studio:"ITV America", status:"wrapped", statusLabel:"Wrapped Apr '26", detail:"Long shoot wrap 10/25–4/26.", prod:"In post.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"Love Is Blind (Season 11)", genre:"unscripted", network:"Netflix", type:"streaming", studio:"Kinetic Content", status:"wrapped", statusLabel:"Wrapped Apr '26", detail:"PA-level credits 3/26–4/26.", prod:"In post.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"Love & Hip-Hop: Atlanta (Season 13)", genre:"unscripted", network:"MTV", type:"cable", studio:"Antoinette Media", status:"wrapped", statusLabel:"Wrapped Apr '26", detail:"Story Producer credits 4/25–4/26.", prod:"In post.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"House Hunters International (Season 99)", genre:"unscripted", network:"HGTV", type:"cable", studio:"Pie Town Productions", status:"wrapped", statusLabel:"Wrapped Apr '26", detail:"Producer credits 8/19–4/26.", prod:"In post.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"Naked and Afraid: Shipwrecked (S1)", genre:"unscripted", network:"Discovery", type:"cable", studio:"Lionsgate Alternative TV", status:"wrapped", statusLabel:"Wrapped May '26", detail:"Post Producer credit 3/26–5/26.", prod:"In post.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"Untitled UNREALISTIC IDEAS Project", genre:"unscripted", network:"TBC", type:"streaming", studio:"UNREALISTIC IDEAS", status:"inprod", statusLabel:"In Production", detail:"TV credit dated 4/26 - Current at Wahlberg shingle.", prod:"In production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"Untitled ITV America Series", genre:"unscripted", network:"TBC", type:"cable", studio:"ITV America", status:"inprod", statusLabel:"In Production", detail:"Darren Ward EP credit.", prod:"In production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"crew", title:"90 Day Fiancé: Before the 90 Days (S9)", genre:"unscripted", network:"TLC", type:"cable", studio:"Sharp Entertainment", status:"inprod", statusLabel:"In Production", detail:"Sound Mixer credit 4/26 - Current.", prod:"In production.", sources:[], dateAdded:"2026-05-06" },
-{ source:"trade", title:"Murder in a Small Town", genre:"scripted", network:"FOX", type:"broadcast", studio:"Fox Entertainment Studios; Universal Television", status:"renew", statusLabel:"Renewed S3", detail:"Pacific Northwest mystery picked up for S3.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"The Lowdown", genre:"scripted", network:"FX", type:"cable", studio:"FX Productions", status:"renew", statusLabel:"Renewed S2", detail:"Sterlin Harjo Tulsa-set drama renewed.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Below Deck Down Under", genre:"unscripted", network:"Bravo", type:"cable", studio:"51 Minds Entertainment", status:"renew", statusLabel:"Renewed S3", detail:"Australian-set yachting franchise picked up.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Dark Winds", genre:"scripted", network:"AMC / AMC+", type:"cable", studio:"AMC Studios", status:"renew", statusLabel:"Renewed S5", detail:"Tony Hillerman noir picked up for S5.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Hope Valley: 1874", genre:"scripted", network:"Hallmark+", type:"streaming", studio:"Crown Media Productions", status:"renew", statusLabel:"Renewed S2", detail:"When Calls the Heart spinoff renewed.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Saturday Night Live UK", genre:"unscripted", network:"Sky One (UK)", type:"cable", studio:"Universal International Studios; Broadway Video", status:"renew", statusLabel:"Renewed Series 2", detail:"Lorne Michaels UK adaptation confirmed for Series 2.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Tires", genre:"scripted", network:"Netflix", type:"streaming", studio:"3 Arts Entertainment", status:"renew", statusLabel:"Renewed S3", detail:"Shane Gillis comedy returns August 13, 2026.", prod:"In post.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"You, Me & My Ex", genre:"unscripted", network:"TLC", type:"cable", studio:"Magilla Entertainment", status:"renew", statusLabel:"Renewed S2", detail:"TLC blended-family docusoap renewed.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Talamasca: The Secret Order", genre:"scripted", network:"AMC / AMC+", type:"cable", studio:"AMC Studios", status:"cancel", statusLabel:"Canceled", detail:"Anne Rice spinoff canceled after one season.", prod:"Wrapped.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"The Bear", genre:"scripted", network:"FX / Hulu", type:"streaming", studio:"FX Productions", status:"cancel", statusLabel:"Final Season", detail:"Final season premieres June 25, 2026.", prod:"Post.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"The Chi", genre:"scripted", network:"Paramount+ / Showtime", type:"streaming", studio:"20th Television; Hillman Grad", status:"cancel", statusLabel:"Final Season", detail:"Lena Waithe drama final season starts May 22.", prod:"Post.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Survival of the Thickest", genre:"scripted", network:"Netflix", type:"streaming", studio:"Netflix; Universal Television", status:"cancel", statusLabel:"Final Season", detail:"Michelle Buteau comedy ends July 2.", prod:"Post.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Love & Hip Hop (franchise)", genre:"unscripted", network:"VH1", type:"cable", studio:"Antoinette Media; Eastern TV", status:"cancel", statusLabel:"Franchise Ending", detail:"VH1 announces 'Love & Hip Hop: The Final Chapter' for Fall 2026.", prod:"Wrapping.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Nation's Dumbest", genre:"unscripted", network:"FOX", type:"broadcast", studio:"Fox Alternative Entertainment", status:"pickup", statusLabel:"Series Order", detail:"Celebrity game show hosted by Jack Whitehall.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Cocktail Wars", genre:"unscripted", network:"E!", type:"cable", studio:"E! Entertainment / NBCU", status:"pickup", statusLabel:"Series Order", detail:"Lance Bass & Joey Fatone mixology competition.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Crashers (HGTV)", genre:"unscripted", network:"HGTV", type:"cable", studio:"HGTV / Discovery", status:"pickup", statusLabel:"Series Order", detail:"13-episode reno series with Jonathan Knight.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Disavowed", genre:"scripted", network:"Apple TV+", type:"streaming", studio:"Apple Studios", status:"pickup", statusLabel:"Series Order", detail:"James Marsden CIA action thriller.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"Untitled Vegas Series (Scorsese)", genre:"scripted", network:"Netflix", type:"streaming", studio:"Netflix; Koppelman & Levien", status:"pickup", statusLabel:"Series Order", detail:"Oscar Isaac headlines Scorsese Vegas drama.", prod:"Pre-production.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"American Blue", genre:"scripted", network:"HBO Max", type:"streaming", studio:"HBO Max Originals", status:"pickup", statusLabel:"Pilot", detail:"Milo Ventimiglia drama pilot.", prod:"Pilot in development.", sources:[], dateAdded:"2026-05-07" },
-{ source:"trade", title:"The Forsytes (Season 3)", genre:"scripted", network:"PBS Masterpiece", type:"broadcast", studio:"Mammoth Screen / ITV Studios", status:"inprod", statusLabel:"In Production", detail:"Season 3 starts filming.", prod:"In production.", sources:[], dateAdded:"2026-05-07" }
-];
+let items = [];
 
 const order = { renew: 0, pickup: 1, cancel: 2, inprod: 3, wrapped: 4 };
 
@@ -1106,9 +1137,11 @@ async function initApp() {
     if (bundle) {
       channels = (bundle.channels || []).map(_mapChannel);
       agreements = (bundle.agreements || []).map(_mapAgreement);
+      items = (bundle.items || []).map(_mapItem);
       const s = bundle.state;
       if (s) {
         state = { favs: s.favs || {}, archived: s.archived || {}, edits: s.edits || {}, added: s.added || [] };
+        if (s.last_refreshed) LAST_REFRESHED = s.last_refreshed;
       }
       try {
         localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(channels));
@@ -1117,17 +1150,20 @@ async function initApp() {
       } catch {}
     } else {
       console.warn('[sync] _loadAllInOne returned no data; not seeding to protect remote state.');
-      channels = []; agreements = [];
+      channels = []; agreements = []; items = [];
     }
   } else {
     const chData = await chLoadFromDB();
     if (chData) { channels = chData; } else { channels = CH_DEFAULTS.slice(); await chSave(channels); }
     const agData = await agLoadFromDB();
     if (agData) { agreements = agData; } else { agreements = AG_DEFAULTS.slice(); await agSave(agreements); }
+    const itData = await slLoadFromDB();
+    if (itData) { items = itData; }
   }
   // In Cowork mode, state is already populated by _loadAllInOne above.
   if (!IS_COWORK) {
     state = await loadState();
+    if (state && state.last_refreshed) LAST_REFRESHED = state.last_refreshed;
   }
   state.favs = state.favs || {}; state.archived = state.archived || {};
   state.edits = state.edits || {}; state.added = state.added || [];
@@ -1152,6 +1188,8 @@ async function initApp() {
       if (r2 && r2.length) _lastAgUpdatedAt = r2[0].updated_at;
       const r3 = await sbGet('/rest/v1/slate_state?id=eq.singleton&select=updated_at');
       if (r3 && r3.length) _lastStUpdatedAt = r3[0].updated_at;
+      const r4 = await sbGet('/rest/v1/slate_items?select=updated_at&order=updated_at.desc&limit=1');
+      if (r4 && r4.length) _lastItUpdatedAt = r4[0].updated_at;
     } catch {}
     startPolling();
   }
@@ -1184,7 +1222,7 @@ function sortItems(by) {
 }
 sortItems("priority");
 
-const LAST_REFRESHED = "2026-05-07";
+let LAST_REFRESHED = "2026-05-27"; // overwritten from slate_state.last_refreshed on init
 const TODAY = new Date().toISOString().slice(0,10);
 function itemKeyOf(it) { return (it.title || "").toLowerCase().trim() + "|" + (it.source || ""); }
 function persistAdded() {
@@ -1335,7 +1373,7 @@ function render() {
           <div class="btn-row">
             <button class="btn btn-primary" data-action="saveEdit" data-key="${esc(k)}">Save</button>
             <button class="btn" data-action="cancelEdit" data-key="${esc(k)}">Cancel</button>
-            ${it._userAdded ? `<button class="btn btn-danger" data-action="deleteAdded" data-key="${esc(k)}">Delete show</button>` : ''}
+            <button class="btn btn-danger" data-action="deleteAdded" data-key="${esc(k)}">Delete show</button>
           </div>
         </div>
       </div>
@@ -1353,15 +1391,16 @@ function render() {
       else if (action === "saveEdit") {
         const form = list.querySelector('[data-form="' + CSS.escape(key) + '"]'); if (!form) return;
         const fields = {}; form.querySelectorAll("[data-field]").forEach(inp => { fields[inp.dataset.field] = inp.value; });
-        if (baseItem._userAdded) {
-          Object.assign(baseItem, fields); persistAdded(); recomputeAllSignals();
-          const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value); render();
-        } else { saveEdit(baseItem, fields); recomputeAllSignals(); render(); }
+        Object.assign(baseItem, fields);
+        recomputeAllSignals();
+        const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value); render();
+        suppressRealtime(); slSaveItem(baseItem);
+        const k = itemKey(baseItem); if (state.edits[k]) { delete state.edits[k]; suppressRealtime(); saveState(state); }
       }
       else if (action === "deleteAdded") {
-        if (!baseItem._userAdded) return;
         if (!confirm(`Delete "${baseItem.title}"?`)) return;
-        const idx = items.indexOf(baseItem); if (idx > -1) items.splice(idx, 1); persistAdded(); render();
+        const idx = items.indexOf(baseItem); if (idx > -1) items.splice(idx, 1); render();
+        suppressRealtime(); slDeleteItem(baseItem);
       }
       else if (action === "reach") {
         e.preventDefault();
@@ -1478,13 +1517,14 @@ if (_chSyncBtn) _chSyncBtn.addEventListener("click", e => _doManualSync(e.curren
 const _agSyncBtn = document.getElementById("ag-sync");
 if (_agSyncBtn) _agSyncBtn.addEventListener("click", e => _doManualSync(e.currentTarget));
 
-document.getElementById("addShow").addEventListener("click", () => {
+document.getElementById("addShow").addEventListener("click", async () => {
   const today = new Date().toISOString().slice(0,10);
   let n = 1; let title = "New show";
   while (items.find(it => (it.title||"").toLowerCase() === title.toLowerCase())) { n += 1; title = "New show " + n; }
-  const newItem = { source: "trade", title, genre: "scripted", network: "", type: "streaming", studio: "", status: "inprod", statusLabel: "In Production", detail: "", prod: "", sources: [], dateAdded: today, _userAdded: true };
-  items.unshift(newItem); persistAdded(); recomputeAllSignals();
+  const newItem = { source: "trade", title, genre: "scripted", network: "", type: "streaming", studio: "", status: "inprod", statusLabel: "In Production", detail: "", prod: "", sources: [], dateAdded: today };
+  items.unshift(newItem); recomputeAllSignals();
   const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value); render();
+  suppressRealtime(); await slSaveItem(newItem);
   const k = itemKeyOf(newItem);
   const form = list.querySelector('[data-form="' + CSS.escape(k) + '"]');
   if (form) { form.classList.add("open"); form.scrollIntoView({ behavior: "smooth", block: "center" });
