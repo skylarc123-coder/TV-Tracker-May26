@@ -2,7 +2,13 @@
 {
   "name": "Tv Tracker Sandbox",
   "schemaVersion": 1,
-  "description": "TV Production Slate tracker with two-way Supabase sync. Edits in this artifact AND on the Vercel site (https://tv-tracker-may26.vercel.app) flow through the same Supabase backend, with the artifact polling every 8 seconds for remote changes."
+  "description": "TV Production Slate tracker — priority-scored outreach list for music licensing. Reads/writes to Supabase via a hybrid data layer (Cowork MCP bridge in-artifact, fetch() on the Vercel mirror). Tabs: Slate, Channels, Agreements. Inactive until Supabase MCP is connected on this account.",
+  "mcpTools": [
+    "mcp__5165bf0c-b72b-4133-97da-461912cb6752__execute_sql"
+  ],
+  "mcpServerNames": [
+    "Supabase"
+  ]
 }
 </script>
 <html lang="en">
@@ -63,11 +69,6 @@
     padding: 1px 6px; border-radius: 3px; margin-left: 6px;
     background: #fef3e6; color: #a05a00;
     text-transform: uppercase; letter-spacing: .03em; }
-  .new-tag { display: inline-block; font-size: 10px; font-weight: 700;
-    padding: 1px 6px; border-radius: 3px; margin-left: 6px;
-    background: #fff3b0; color: #7a5c00;
-    text-transform: uppercase; letter-spacing: .04em; border: 1px solid #e6c97a; }
-  .row.is-new { border-left: 3px solid #e6c97a; }
   .added-on { font-size: 11px; color: var(--muted); margin-left: 6px; }
   .detail { font-size: 13px; margin: 4px 0; }
   .prod-status { font-size: 12px; color: var(--muted); margin-top: 4px;
@@ -123,22 +124,6 @@
     border: 1px solid var(--border-strong); border-radius: 6px;
     background: #fff; font-family: inherit; }
 
-  .proto-banner { background: linear-gradient(135deg, #eef6ff, #f5edff);
-    border: 1px solid #c5b8e6; border-radius: 8px;
-    padding: 12px 14px; margin: 10px 0 12px;
-    font-size: 13px; color: #2c1f5b; }
-  .proto-banner .title { font-weight: 700; margin-bottom: 6px; font-size: 13px; }
-  .proto-banner .sources { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
-  .proto-banner .src-pill { display: inline-flex; align-items: center; gap: 6px;
-    background: #fff; border: 1px solid #c5b8e6; border-radius: 6px;
-    padding: 4px 10px; font-size: 12px; font-weight: 600; color: #2c1f5b;
-    cursor: pointer; user-select: none; text-decoration: none; }
-  .proto-banner .src-pill:hover { background: #f8f4ff; }
-  .proto-banner .src-pill .dot { width: 7px; height: 7px; border-radius: 50%;
-    background: #e0a800; box-shadow: 0 0 0 2px rgba(224,168,0,0.18); }
-  .proto-banner .src-pill.connected .dot { background: #2f7d4f; box-shadow: 0 0 0 2px rgba(47,125,79,0.18); }
-  .proto-banner .src-pill .label { color: #6b6b6b; font-weight: 500; font-size: 11px; }
-
   .priority { display: inline-flex; align-items: center; gap: 6px;
     padding: 3px 9px; border-radius: 999px;
     font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
@@ -171,11 +156,6 @@
   .sig.prob-Low     { background: #e6efe9; border-color: #b7d4c2; color: #3a6650; }
   .sig.prob-Low .k  { color: #3a6650; }
 
-  .reach-cta { display: inline-flex; align-items: center; gap: 4px;
-    margin-top: 6px; padding: 4px 10px; border-radius: 6px;
-    background: #2f7d4f; color: #fff; border: 1px solid #2f7d4f;
-    font-size: 11.5px; font-weight: 600; cursor: pointer; text-decoration: none; }
-  .reach-cta:hover { background: #245d3c; }
   .row.proto { grid-template-columns: 150px 1fr; }
   .row.proto .badge-stack { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 
@@ -265,6 +245,76 @@
   #sync-indicator.updated { background: #fff3d6; color: #876200; border-color: #e6c97a; }
   #sync-indicator.updated #sync-dot { background: #876200; }
   #sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #2f7d4f; transition: background .3s ease; }
+
+  /* === Enhanced status prominence === */
+  .row.proto .badge { font-size: 12.5px; padding: 5px 12px; font-weight: 700;
+    letter-spacing: .05em; border-radius: 6px; }
+  .b-indev   { background: #fff3e0; color: #b25e00; }
+  .b-prepro  { background: #defaff; color: #08607b; }
+  .b-postpro { background: #ece1ff; color: #5e2f87; }
+  .row.proto.s-renew   { border-left: 5px solid #2f7d4f; }
+  .row.proto.s-cancel  { border-left: 5px solid #b03a2e; }
+  .row.proto.s-pickup  { border-left: 5px solid #1f5fa8; }
+  .row.proto.s-indev   { border-left: 5px solid #b25e00; }
+  .row.proto.s-prepro  { border-left: 5px solid #08607b; }
+  .row.proto.s-postpro { border-left: 5px solid #5e2f87; }
+  .row.proto.s-wrapped { border-left: 5px solid #555; }
+  .row.proto.s-inprod  { border-left: 5px solid #08607b; }
+
+  /* === Multi-select filter widget === */
+  .ms-filter { position: relative; display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .ms-btn { padding: 6px 10px; font-size: 12px; font-weight: 500;
+    border: 1px solid var(--border-strong); border-radius: 6px;
+    background: #fff; color: var(--text); cursor: pointer;
+    text-transform: none; letter-spacing: normal; font-family: inherit;
+    display: inline-flex; align-items: center; gap: 6px; }
+  .ms-btn:hover { border-color: var(--text); }
+  .ms-btn .ms-count { color: var(--muted); font-size: 11px; }
+  .ms-btn.has-selection { border-color: var(--accent); }
+  .ms-btn.has-selection .ms-count { color: var(--accent); font-weight: 600; }
+  .ms-menu { display: none; position: absolute; top: calc(100% + 4px); left: 0;
+    min-width: 200px; max-height: 320px; overflow-y: auto;
+    background: #fff; border: 1px solid var(--border-strong); border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.10); padding: 6px; z-index: 50;
+    text-transform: none; letter-spacing: normal; }
+  .ms-filter.open .ms-menu { display: block; }
+  .ms-menu label { display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px; font-size: 13px; color: var(--text); cursor: pointer;
+    border-radius: 4px; font-weight: 400; user-select: none; }
+  .ms-menu label:hover { background: #f5f3ed; }
+  .ms-menu label input { margin: 0; }
+  .ms-menu .ms-clear { display: block; width: 100%; padding: 6px 8px;
+    margin-top: 4px; background: transparent; border: none; cursor: pointer;
+    font-size: 11px; color: var(--muted); text-align: left;
+    border-top: 1px solid var(--border); border-radius: 0; font-family: inherit; }
+  .ms-menu .ms-clear:hover { color: var(--text); }
+
+  /* === Owner / claim === */
+  .owner-row { display: inline-flex; align-items: center; gap: 8px;
+    margin-top: 8px; padding: 5px 10px;
+    background: #f5f3ed; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+  .owner-row .owner-label { color: var(--muted); font-weight: 600;
+    text-transform: uppercase; letter-spacing: .04em; font-size: 10px; }
+  .owner-row .owner-name { font-weight: 600; color: var(--text); }
+  .owner-row .owner-claim-btn { padding: 3px 10px; font-size: 11px;
+    border: 1px solid var(--border-strong); border-radius: 4px;
+    background: #fff; color: var(--text); cursor: pointer; font-weight: 600; font-family: inherit; }
+  .owner-row .owner-claim-btn:hover { background: var(--text); color: #fff; border-color: var(--text); }
+  .owner-row .owner-release-btn { padding: 2px 8px; font-size: 10px;
+    border: 1px solid var(--border); border-radius: 4px;
+    background: transparent; color: var(--muted); cursor: pointer; font-family: inherit; }
+  .owner-row .owner-release-btn:hover { color: var(--cancel); border-color: #f0c5be; }
+
+  /* === Inline music input === */
+  .sig.music-edit { padding: 0; background: #fff; border-color: var(--border-strong);
+    display: inline-flex; align-items: stretch; }
+  .sig.music-edit .k { padding: 3px 4px 3px 8px; align-self: center; }
+  .sig.music-edit input { border: none; padding: 3px 8px 3px 4px;
+    font-size: 11.5px; background: transparent; font-family: inherit;
+    color: var(--text); outline: none; width: 220px; }
+  .sig.music-edit input::placeholder { color: var(--muted); font-style: italic; }
+  .sig.music-edit input:focus { background: #fafaf7; }
 </style>
 </head>
 <body>
@@ -292,51 +342,101 @@
       <h1>TV Production Slate — Priority Prototype</h1>
       <div class="sub">Slate of in-flight TV productions, scored for outreach priority. Backend signals are currently mocked using rule-based heuristics until the real data sources are wired in.</div>
     </header>
-    <div class="proto-banner">
-      <div class="title">⚙ Data sources</div>
-      <div>Royalty Potential and Rerun Probability come from the <b>Channels</b> dashboard. License coverage comes from the <b>Agreements</b> dashboard. Music style is still derived locally until the music-usage feed is wired.</div>
-      <div class="sources">
-        <a class="src-pill connected" data-tab-link="channels"><span class="dot"></span>Channels dashboard<span class="label">editable</span></a>
-        <a class="src-pill connected" data-tab-link="agreements"><span class="dot"></span>Agreements dashboard<span class="label">editable</span></a>
-        <span class="src-pill" data-src="musicusage"><span class="dot"></span>Music Usage Intelligence<span class="label">mock</span></span>
-      </div>
-      <div class="stats" id="dbStatus" style="margin-top:8px; color:#2c1f5b; font-weight:500;"></div>
-    </div>
     <div class="toolbar">
       <input type="search" id="q" placeholder="Search show, network, studio…">
-      <label class="filter-group">Priority <select data-filter="priority"><option value="all">All</option><option value="high">High</option><option value="med">Medium</option><option value="low">Low</option></select></label>
-      <label class="filter-group">Covered Under License <select data-filter="license"><option value="all">All</option><option value="Yes">Yes</option><option value="No">No</option><option value="Unknown">Unknown</option></select></label>
-      <label class="filter-group">Royalty Potential <select data-filter="royalty"><option value="all">All</option><option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option></select></label>
-      <label class="filter-group">Rerun Probability <select data-filter="rerunProb"><option value="all">All</option><option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option></select></label>
-      <label class="filter-group">Status <select data-filter="status"><option value="all">All</option><option value="renew">Renewed</option><option value="cancel">Canceled</option><option value="pickup">Pickup Buzz</option><option value="wrapped">Just Wrapped</option><option value="inprod">In Production</option></select></label>
-      <label class="filter-group">Type <select data-filter="type"><option value="all">All</option><option value="broadcast">Broadcast</option><option value="cable">Cable</option><option value="streaming">Streaming</option></select></label>
-      <label class="filter-group">Genre <select data-filter="genre"><option value="all">All</option><option value="scripted">Scripted</option><option value="unscripted">Unscripted</option></select></label>
-      <label class="filter-group">Source <select data-filter="source"><option value="all">All</option><option value="trade">Trade Press</option><option value="crew">Crew Listings</option></select></label>
-      <label class="filter-group">Date Added <select data-filter="dateRange"><option value="all">All Dates</option><option value="new">New (latest refresh)</option><option value="older">Older</option><option value="byDate">By Run</option><option value="range">Custom Range</option></select></label>
+      <div class="ms-filter" data-filter="priority">
+        <button class="ms-btn" type="button">Priority: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <label><input type="checkbox" value="high"> High</label>
+          <label><input type="checkbox" value="med"> Medium</label>
+          <label><input type="checkbox" value="low"> Low</label>
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <div class="ms-filter" data-filter="license">
+        <button class="ms-btn" type="button">Covered: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <label><input type="checkbox" value="Yes"> Yes</label>
+          <label><input type="checkbox" value="No"> No</label>
+          <label><input type="checkbox" value="Unknown"> Unknown</label>
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <div class="ms-filter" data-filter="royalty">
+        <button class="ms-btn" type="button">Royalty: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <label><input type="checkbox" value="High"> High</label>
+          <label><input type="checkbox" value="Medium"> Medium</label>
+          <label><input type="checkbox" value="Low"> Low</label>
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <div class="ms-filter" data-filter="rerunProb">
+        <button class="ms-btn" type="button">Rerun: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <label><input type="checkbox" value="High"> High</label>
+          <label><input type="checkbox" value="Medium"> Medium</label>
+          <label><input type="checkbox" value="Low"> Low</label>
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <div class="ms-filter" data-filter="status">
+        <button class="ms-btn" type="button">Status: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <label><input type="checkbox" value="renew"> Renewed</label>
+          <label><input type="checkbox" value="cancel"> Canceled</label>
+          <label><input type="checkbox" value="pickup"> Pickup Buzz</label>
+          <label><input type="checkbox" value="indev"> In Development</label>
+          <label><input type="checkbox" value="prepro"> Pre-production</label>
+          <label><input type="checkbox" value="postpro"> Post-production</label>
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <div class="ms-filter" data-filter="type">
+        <button class="ms-btn" type="button">Type: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <label><input type="checkbox" value="broadcast"> Broadcast</label>
+          <label><input type="checkbox" value="cable"> Cable</label>
+          <label><input type="checkbox" value="streaming"> Streaming</label>
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <div class="ms-filter" data-filter="genre">
+        <button class="ms-btn" type="button">Genre: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <label><input type="checkbox" value="scripted"> Scripted</label>
+          <label><input type="checkbox" value="unscripted"> Unscripted</label>
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <div class="ms-filter" data-filter="source">
+        <button class="ms-btn" type="button">Source: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <label><input type="checkbox" value="trade"> Trade Press</label>
+          <label><input type="checkbox" value="crew"> Crew Listings</label>
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <label class="filter-group">Date Added <select data-filter="dateRange"><option value="all">All Dates</option><option value="older">Older</option><option value="byDate">By Run</option><option value="range">Custom Range</option></select></label>
       <select id="dateSelect" style="display:none;"></select>
       <span id="rangePicker" style="display:none; align-items:center; gap:6px; font-size:12px; color:var(--muted);">
         <input type="date" id="dateFrom"><span>to</span><input type="date" id="dateTo">
         <button id="rangeClear" class="btn" style="padding:4px 10px; font-size:11px;">Clear</button>
       </span>
       <label class="filter-group">View <select data-filter="view"><option value="all">All Items</option><option value="favs">★ Favorites</option><option value="archived">Archived</option></select></label>
-      <label class="filter-group">Sort <select id="sortBy"><option value="priority">Priority score (desc)</option><option value="status">Status (default)</option><option value="title">Title (A–Z)</option><option value="dateAdded">Date added (newest)</option></select></label>
+      <label class="filter-group">Sort <select id="sortBy"><option value="dateAdded">Date added (newest)</option><option value="priority">Priority score (desc)</option><option value="status">Status (default)</option><option value="title">Title (A–Z)</option></select></label>
       <button class="btn-export" id="addShow" style="margin-left:auto; background:var(--text); color:#fff; border-color:var(--text);">+ Add show</button>
       <button class="btn-export" id="manualSync" title="Pull the latest team edits from Supabase">↻ Sync</button>
       <button class="btn-export" id="exportCsv">⤓ Export CSV</button>
     </div>
     <div class="stats" id="stats"></div>
     <div id="list"></div>
-    <footer>Prototype slate. Royalty Potential, Rerun Probability, Covered Under License, and music style are mocked. Channels and Agreements dashboard edits flow back into the priority score.</footer>
+    <footer>Prototype slate. Royalty Potential, Rerun Probability, and Covered Under License are mocked. Channels and Agreements dashboard edits flow back into the priority score.</footer>
   </section>
 
   <section id="tab-channels" class="tab-section">
     <header><h1>Channels Dashboard</h1>
       <div class="sub">Channel-level Royalty Potential, payout, and rerun probability data. Expand a row to add detailed notes. Edits flow into the Slate's priority score.</div></header>
-    <div class="proto-banner">
-      <div class="title">⚙ Data source · Sisense PRO heatmaps (mock)</div>
-      Track which channels pay out the most performance royalties and which carry the most rerun volume.
-      <div class="stats" id="ch-bannerStats" style="margin-top:6px;"></div>
-    </div>
     <div class="dash-toolbar">
       <input type="search" id="ch-q" placeholder="Search channel name or notes…">
       <button class="btn btn-primary" id="ch-addRow">+ Add channel</button>
@@ -363,11 +463,6 @@
   <section id="tab-agreements" class="tab-section">
     <header><h1>Agreements Dashboard</h1>
       <div class="sub">Annual master/sync license agreements. Expand a row to add SalesForce link, covered territories, content types, and detailed notes.</div></header>
-    <div class="proto-banner">
-      <div class="title">⚙ Data source · License DB (mock)</div>
-      Log which entities are covered under our master sync annual agreements. Edits flow back to the Slate's "Covered Under License" signal.
-      <div class="stats" id="ag-bannerStats" style="margin-top:6px;"></div>
-    </div>
     <div class="dash-toolbar">
       <input type="search" id="ag-q" placeholder="Search entity name or notes…">
       <button class="btn btn-primary" id="ag-addRow">+ Add agreement</button>
@@ -404,7 +499,7 @@ const SB_URL = 'https://yhpdkoscfnsoozhyhufj.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlocGRrb3NjZm5zb296aHlodWZqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MTI3MDYsImV4cCI6MjA5NTM4ODcwNn0.r6u7sDKqskKYRD5t56Si1PwK5hQjITjCC3B3G7JNH3I';
 const SB_H = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
 const SB_PROJECT_ID = 'yhpdkoscfnsoozhyhufj';
-const SB_MCP_TOOL = 'mcp__93e82866-3f4c-4d40-847f-aa8337004b00__execute_sql';
+const SB_MCP_TOOL = 'mcp__5165bf0c-b72b-4133-97da-461912cb6752__execute_sql';
 const IS_COWORK = typeof window !== 'undefined' && window.cowork && typeof window.cowork.callMcpTool === 'function';
 
 // SQL value helpers
@@ -413,9 +508,6 @@ function _sqlNum(v) { const n = parseInt(v); return isNaN(n) ? 'NULL' : String(n
 function _sqlJson(v) { return "'" + JSON.stringify(v == null ? null : v).replace(/'/g, "''") + "'::jsonb"; }
 
 // Robustly extract a row array from whatever shape execute_sql returns.
-// Observed Cowork bridge shape: { content: [{ type: "text", text: '{"result":"...<untrusted-data-X>[rows]</untrusted-data-X>..."}' }], isError: false }
-// The wrapper TEXT mentions the tag name once before the actual block (e.g. "within the below <untrusted-data-X> boundaries"),
-// so we have to find the LAST opening tag before the closing tag, not the first.
 function _extractRows(r) {
   if (r == null) return null;
   if (Array.isArray(r)) return r;
@@ -437,7 +529,6 @@ function _extractRows(r) {
   }
 
   if (typeof r === 'string') {
-    // Strategy A: parse the whole string as JSON — handles {"result":"..."} wrapper
     try {
       const v = JSON.parse(r);
       if (Array.isArray(v)) return v;
@@ -447,11 +538,9 @@ function _extractRows(r) {
       }
     } catch {}
 
-    // Strategy B: extract the LAST <untrusted-data-X>...</untrusted-data-X> block
     const closeIdx = r.lastIndexOf('</untrusted-data');
     if (closeIdx > 0) {
       const before = r.slice(0, closeIdx);
-      // Walk forward through all opening tags before closeIdx; keep the last one
       let lastOpenEnd = -1;
       let idx = before.indexOf('<untrusted-data');
       while (idx !== -1) {
@@ -465,7 +554,6 @@ function _extractRows(r) {
       }
     }
 
-    // Strategy C: fall back to any [...] JSON array anywhere in the string (greedy)
     const arrMatch = r.match(/\[[\s\S]*\]/);
     if (arrMatch) {
       try { const v = JSON.parse(arrMatch[0]); if (Array.isArray(v)) return v; } catch {}
@@ -476,8 +564,7 @@ function _extractRows(r) {
   return null;
 }
 
-// Diagnostic: capture the raw shape of the first few MCP responses so we can debug
-// parsing without needing DevTools. Visible as a clickable badge in the corner.
+// Diagnostic: capture raw shape of first few MCP responses for debugging.
 const _mcpDiag = { samples: [], errors: [], sb: [] };
 function _logMcp(sql, raw, parsed, err) {
   if (_mcpDiag.samples.length < 6) {
@@ -494,8 +581,6 @@ function _logMcp(sql, raw, parsed, err) {
     _renderMcpDiagBadge();
   }
 }
-// Website fetch logger — surfaces upsert/patch/delete status into the badge
-// so we can verify on-screen that writes are actually reaching Supabase.
 function _logSb(kind, url, status, detail) {
   try {
     _mcpDiag.sb.push({ t: new Date().toISOString().slice(11,19), kind, url: (url||'').slice(-80), status, detail: (detail||'').slice(0,300) });
@@ -536,8 +621,6 @@ function _renderMcpDiagBadge() {
   if (sbErr > 0) { badge.style.background = '#fde0e0'; badge.style.color = '#a02020'; badge.style.borderColor = '#e0a0a0'; }
 }
 
-// Combined "load everything" SQL — one MCP call returns channels + agreements + state.
-// Used in Cowork mode to keep the artifact's MCP popups to ONE per open.
 async function _loadAllInOne() {
   if (!IS_COWORK) return null;
   const sql = "SELECT json_build_object(" +
@@ -590,7 +673,6 @@ async function sbUpsert(path, body) {
   if (IS_COWORK) {
     if (!body || !body.length) return;
     if (path === '/rest/v1/channels') {
-      // Build a single multi-VALUES upsert so this is ONE MCP call instead of N.
       const tuples = body.map(c => "(" +
         _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
         _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", NOW())").join(", ");
@@ -615,11 +697,6 @@ async function sbUpsert(path, body) {
     console.warn('sbUpsert: no MCP mapping for path', path);
     return;
   }
-  // Website (fetch) path. PostgREST's `Prefer: resolution=merge-duplicates`
-  // resolves on the PRIMARY KEY by default. Our PK is `id` (uuid) but our
-  // semantic key is `name` (channels) / `entity` (agreements). Without
-  // `on_conflict=…`, the upsert tries to merge on `id`, fails, then INSERTs
-  // a fresh uuid → unique-constraint violation on name/entity → silent 409.
   let url = SB_URL + path;
   if (path === '/rest/v1/channels' && url.indexOf('on_conflict') < 0)        url += '?on_conflict=name';
   else if (path === '/rest/v1/agreements' && url.indexOf('on_conflict') < 0) url += '?on_conflict=entity';
@@ -674,6 +751,13 @@ const CH_LS_KEY_SB = 'slate-channels-v1';
 const AG_LS_KEY_SB = 'slate-agreements-v1';
 const ST_LS_KEY_SB = 'tv-tracker-state-v1';
 
+// Migrate legacy status values to the new 6-status schema.
+function _migrateStatus(s) {
+  if (s === 'wrapped') return 'postpro';
+  if (s === 'inprod')  return 'prepro';
+  return s || 'renew';
+}
+
 function _mapChannel(c) { return { name: c.name, type: c.type, royaltyPotential: c.royalty_potential, proPayout: c.pro_payout, rerunProbability: c.rerun_probability, notes: c.notes || '' }; }
 function _mapAgreement(a) { return { entity: a.entity, entityType: a.entity_type, scope: a.scope, thirdPartySync: a.third_party_sync, renewalDate: a.renewal_date || '', status: a.status, salesforceUrl: a.salesforce_url || '', territories: a.territories || '', contentTypes: Array.isArray(a.content_types) ? a.content_types : [], notes: a.notes || '' }; }
 function _mapItem(r) {
@@ -684,7 +768,7 @@ function _mapItem(r) {
     type: r.type || 'streaming',
     genre: r.genre || 'scripted',
     studio: r.studio || '',
-    status: r.status || 'renew',
+    status: _migrateStatus(r.status),
     statusLabel: r.status_label || '',
     detail: r.detail || '',
     prod: r.prod || '',
@@ -747,8 +831,6 @@ async function chLoadFromDB() {
   try { localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(mapped)); } catch {}
   return mapped;
 }
-// Per-row writes (used by inline edits) — touches only the changed row in Supabase.
-// Critical: keeps the artifact from clobbering teammate edits on unrelated rows.
 async function chSaveRow(c) {
   try {
     const all = JSON.parse(localStorage.getItem(CH_LS_KEY_SB) || '[]');
@@ -810,7 +892,6 @@ async function chSave(arr) {
   try { localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(arr)); } catch {}
   const rows = arr.map(c => ({ name: c.name, type: c.type, royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }));
   if (IS_COWORK) {
-    // ONE call: upsert all known names + delete any row whose name isn't in this snapshot.
     if (!rows.length) return;
     const tuples = rows.map(c => "(" +
       _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
@@ -858,14 +939,22 @@ async function agSave(arr) {
 }
 async function loadState() {
   const data = await sbGet('/rest/v1/slate_state?id=eq.singleton&select=*');
-  if (!data || !data.length) return { favs: {}, archived: {}, edits: {}, added: [], last_refreshed: LAST_REFRESHED };
-  const s = { favs: data[0].favs || {}, archived: data[0].archived || {}, edits: data[0].edits || {}, added: data[0].added || [], last_refreshed: data[0].last_refreshed || LAST_REFRESHED };
+  if (!data || !data.length) return { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {}, last_refreshed: LAST_REFRESHED };
+  const ed = data[0].edits || {};
+  // Pull music/owners out of edits sub-objects (we piggyback on the existing JSONB edits column).
+  const music = (ed.__music && typeof ed.__music === 'object') ? ed.__music : {};
+  const owners = (ed.__owners && typeof ed.__owners === 'object') ? ed.__owners : {};
+  const cleanEdits = Object.assign({}, ed);
+  delete cleanEdits.__music; delete cleanEdits.__owners;
+  const s = { favs: data[0].favs || {}, archived: data[0].archived || {}, edits: cleanEdits, added: data[0].added || [], music, owners, last_refreshed: data[0].last_refreshed || LAST_REFRESHED };
   try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
   return s;
 }
 async function saveState(s) {
   try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
-  sbPatch('/rest/v1/slate_state?id=eq.singleton', { favs: s.favs, archived: s.archived, edits: s.edits, added: s.added, updated_at: new Date().toISOString() });
+  // Pack music/owners into the edits JSONB so we don't need a schema change.
+  const editsPayload = Object.assign({}, s.edits || {}, { __music: s.music || {}, __owners: s.owners || {} });
+  sbPatch('/rest/v1/slate_state?id=eq.singleton', { favs: s.favs, archived: s.archived, edits: editsPayload, added: s.added, updated_at: new Date().toISOString() });
 }
 
 // === Two-way sync: suppress local-pull while user is actively editing ============
@@ -910,7 +999,7 @@ async function pollRemoteChannels() {
     if (_lastChUpdatedAt && newest === _lastChUpdatedAt) return false;
     const first = !_lastChUpdatedAt;
     _lastChUpdatedAt = newest;
-    if (first) return false; // first observation, just note timestamp
+    if (first) return false;
     const fresh = await chLoadFromDB();
     if (!fresh) return false;
     channels = fresh;
@@ -958,7 +1047,7 @@ async function pollRemoteState() {
     state = fresh;
     state.favs = state.favs || {}; state.archived = state.archived || {};
     state.edits = state.edits || {}; state.added = state.added || [];
-    // Sync added items into items[] (additive)
+    state.music = state.music || {}; state.owners = state.owners || {};
     if (state.added.length) {
       state.added.forEach(a => {
         if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) {
@@ -1008,7 +1097,6 @@ function startPolling() {
 function stopPolling() {
   if (_pollHandle) { clearInterval(_pollHandle); _pollHandle = null; }
 }
-// Pause polling when tab is hidden (website only — Cowork artifact doesn't poll)
 document.addEventListener('visibilitychange', () => {
   if (IS_COWORK) return;
   if (document.hidden) stopPolling(); else { startPolling(); pollAllRemote(); }
@@ -1017,7 +1105,8 @@ document.addEventListener('visibilitychange', () => {
 // === Slate items (seed) ============================================================
 let items = [];
 
-const order = { renew: 0, pickup: 1, cancel: 2, inprod: 3, wrapped: 4 };
+// Sort order for new 6-status schema. Old keys kept for safety; migration runs in _mapItem.
+const order = { renew: 0, pickup: 1, indev: 2, prepro: 3, postpro: 4, cancel: 5, wrapped: 6, inprod: 7 };
 
 // === Backend signal lookups ========================================================
 function _channelsDB() { try { return JSON.parse(localStorage.getItem("slate-channels-v1") || "[]"); } catch(e) { return []; } }
@@ -1077,35 +1166,19 @@ function computeCovered(it) {
   if (!studio || /TBC|Production company TBC|Unknown/i.test(studio)) return "Unknown";
   return "No";
 }
-function computeMusicStyle(it) {
-  const t = (it.title || "").toLowerCase(); const d = (it.detail || "").toLowerCase();
-  if (it.genre === "unscripted") {
-    if (/housewives|love|jersey|dating|marriage|family vacation|atlanta/.test(t)) return "Pop, dance, urban hip-hop";
-    if (/hunters|renovation|reno|crashers|backyard|honest|hgtv|house/.test(t)) return "Bright indie folk, acoustic";
-    if (/expedition|naked|survival|adventure|wilds|pawn/.test(t)) return "Adventure orchestral, percussion";
-    if (/cocktail|beat|game|wars|charts|search|judge|judy/.test(t)) return "Upbeat pop, sting cues";
-    if (/murder|catfish|crime|investigation|killer|gilgo/.test(t)) return "Tense ambient, dramatic strings";
-    return "Pop, contemporary";
-  }
-  if (/comedy|mockumentary|sitcom/.test(d)) return "Indie pop, quirky cues";
-  if (/medical|drama|thriller|spy|crime/.test(d)) return "Cinematic orchestral, ambient";
-  if (/fantasy|sci-fi|horror|alien|vampire|wizard|harry potter|witch/.test(t + d)) return "Epic orchestral, choral";
-  if (/sports|football|nascar|racing/.test(t + d)) return "Driving rock, electronic";
-  if (/western|noir|navajo|prairie|hope valley/.test(t + d)) return "Americana, folk-western";
-  return "Cinematic orchestral";
-}
 function computePriority(it) {
   let score = 0;
   if (it._royalty === "High") score += 30; else if (it._royalty === "Medium") score += 20; else score += 10;
   if (it._rerunProb === "High") score += 25; else if (it._rerunProb === "Medium") score += 15; else score += 5;
-  if (it.status === "renew") score += 20;
-  else if (it.status === "inprod") score += 18;
-  else if (it.status === "pickup") score += 15;
-  else if (it.status === "wrapped") score += 10;
-  else if (it.status === "cancel") score += 5;
+  if (it.status === "renew")        score += 20;
+  else if (it.status === "prepro")  score += 18;
+  else if (it.status === "postpro") score += 16;
+  else if (it.status === "pickup")  score += 15;
+  else if (it.status === "indev")   score += 12;
+  else if (it.status === "cancel")  score += 5;
   if (it._covered === "Yes") score += 15;
   else if (it._covered === "Unknown") score += 2;
-  if (it._musicStyle && it._musicStyle !== "Cinematic orchestral") score += 5;
+  if (it._musicStyle) score += 5;
   return Math.min(100, score);
 }
 function priorityTier(score) { if (score >= 70) return "high"; if (score >= 50) return "med"; return "low"; }
@@ -1114,7 +1187,9 @@ function recomputeAllSignals() {
     it._royalty = computeRoyaltyPotential(it);
     it._rerunProb = computeRerunProbability(it);
     it._covered = computeCovered(it);
-    it._musicStyle = computeMusicStyle(it);
+    // Music value is user-supplied (no auto-derivation). Pulled from state.music keyed by itemKey.
+    const k = (it.title || "").toLowerCase().trim() + "|" + (it.source || "");
+    it._musicStyle = (state && state.music && state.music[k]) ? state.music[k] : "";
     it._priority = computePriority(it);
     it._tier = priorityTier(it._priority);
   });
@@ -1124,14 +1199,10 @@ recomputeAllSignals();
 // === Async app init ===============================================================
 let channels = [];
 let agreements = [];
-let state = { favs: {}, archived: {}, edits: {}, added: [] };
+let state = { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {} };
 
 async function initApp() {
-  // Force-render the diagnostic badge so it's visible on the website from
-  // the start (it would otherwise only appear after the first MCP/fetch call).
   try { _renderMcpDiagBadge(); } catch {}
-  // In Cowork mode, do ONE combined SQL call that returns all three datasets,
-  // so the user sees a single MCP approval popup on artifact open instead of three.
   if (IS_COWORK) {
     const bundle = await _loadAllInOne();
     if (bundle) {
@@ -1140,7 +1211,12 @@ async function initApp() {
       items = (bundle.items || []).map(_mapItem);
       const s = bundle.state;
       if (s) {
-        state = { favs: s.favs || {}, archived: s.archived || {}, edits: s.edits || {}, added: s.added || [] };
+        const ed = s.edits || {};
+        const music = (ed.__music && typeof ed.__music === 'object') ? ed.__music : {};
+        const owners = (ed.__owners && typeof ed.__owners === 'object') ? ed.__owners : {};
+        const cleanEdits = Object.assign({}, ed);
+        delete cleanEdits.__music; delete cleanEdits.__owners;
+        state = { favs: s.favs || {}, archived: s.archived || {}, edits: cleanEdits, added: s.added || [], music, owners };
         if (s.last_refreshed) LAST_REFRESHED = s.last_refreshed;
       }
       try {
@@ -1160,26 +1236,24 @@ async function initApp() {
     const itData = await slLoadFromDB();
     if (itData) { items = itData; }
   }
-  // In Cowork mode, state is already populated by _loadAllInOne above.
   if (!IS_COWORK) {
     state = await loadState();
     if (state && state.last_refreshed) LAST_REFRESHED = state.last_refreshed;
   }
   state.favs = state.favs || {}; state.archived = state.archived || {};
   state.edits = state.edits || {}; state.added = state.added || [];
+  state.music = state.music || {}; state.owners = state.owners || {};
   if (state.added.length) {
     state.added.forEach(a => { if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) items.unshift({ ...a, _userAdded: true }); });
   }
   recomputeAllSignals();
   const sb2 = document.getElementById("sortBy"); if (sb2) sortItems(sb2.value);
   render();
+  setupMultiSelects();
   updateBannerCounts();
   switchTab((location.hash || "").replace("#","") || "slate");
 
   showSyncBadge('synced');
-  // In the website, automatic polling pulls teammate edits every 8s.
-  // In the Cowork artifact, polling would trigger an MCP approval popup on every
-  // call, so we DON'T auto-poll there — the user clicks the "↻ Sync" button to pull.
   if (!IS_COWORK) {
     try {
       const r1 = await sbGet('/rest/v1/channels?select=updated_at&order=updated_at.desc&limit=1');
@@ -1195,7 +1269,6 @@ async function initApp() {
   }
 }
 
-// Start: load from Supabase then render and begin polling
 (async () => {
   const lo = document.getElementById('loading-overlay');
   if (lo) { lo.style.display = 'flex'; }
@@ -1207,6 +1280,7 @@ function updateBannerCounts() {
   const chCount = channels.length;
   const agCount = agreements.length;
   const dbDriven = items.filter(it => it._royaltySource === "db" || it._licenseSource === "db").length;
+  // Banner is removed; just leave the function as a no-op-friendly stub so callers don't error.
   const el = document.getElementById("dbStatus");
   if (el) el.textContent = chCount + " channels logged · " + agCount + " agreements logged · " + dbDriven + " of " + items.length + " items pulling signals from the dashboards.";
 }
@@ -1215,14 +1289,14 @@ function sortItems(by) {
   else if (by === "title") items.sort((a,b) => a.title.localeCompare(b.title));
   else if (by === "dateAdded") items.sort((a,b) => (b.dateAdded || "").localeCompare(a.dateAdded || "") || a.title.localeCompare(b.title));
   else items.sort((a,b) => {
-    const so = order[a.status] - order[b.status]; if (so !== 0) return so;
+    const so = (order[a.status] ?? 99) - (order[b.status] ?? 99); if (so !== 0) return so;
     if (a.dateAdded !== b.dateAdded) return (b.dateAdded || "").localeCompare(a.dateAdded || "");
     return a.title.localeCompare(b.title);
   });
 }
-sortItems("priority");
+sortItems("dateAdded");
 
-let LAST_REFRESHED = "2026-05-27"; // overwritten from slate_state.last_refreshed on init
+let LAST_REFRESHED = "2026-05-27";
 const TODAY = new Date().toISOString().slice(0,10);
 function itemKeyOf(it) { return (it.title || "").toLowerCase().trim() + "|" + (it.source || ""); }
 function persistAdded() {
@@ -1233,13 +1307,7 @@ function persistAdded() {
   suppressRealtime(); saveState(state);
 }
 function itemKey(it) { return (it.title || "").toLowerCase().trim() + "|" + (it.source || ""); }
-// applyOverlay preserves the ORIGINAL key on `_origKey` so the render can use
-// it for data-key attributes. Without this, edits that change the title rename
-// the row's key, and the click handler's items.find() can no longer locate the
-// raw item by that key — Edit/Revert/Save buttons silently no-op on edited rows.
 function applyOverlay(it) { const k = itemKey(it); if (state.edits[k]) return Object.assign({}, it, state.edits[k], { _origKey: k }); return it; }
-// Prefer _origKey when present so state lookups still work on overlaid items
-// (otherwise editing a title would silently un-favorite / un-archive the row).
 function isFav(it) { return !!state.favs[it._origKey || itemKey(it)]; }
 function isArchived(it) { return !!state.archived[it._origKey || itemKey(it)]; }
 function isEdited(it) { return !!state.edits[it._origKey || itemKey(it)]; }
@@ -1247,7 +1315,21 @@ function toggleFav(it) { const k = itemKey(it); if (state.favs[k]) delete state.
 function toggleArchive(it) { const k = itemKey(it); if (state.archived[k]) delete state.archived[k]; else state.archived[k] = true; suppressRealtime(); saveState(state); render(); }
 function saveEdit(it, fields) { const k = itemKey(it); state.edits[k] = fields; suppressRealtime(); saveState(state); render(); }
 function revertEdit(it) { const k = itemKey(it); delete state.edits[k]; suppressRealtime(); saveState(state); render(); }
-function isNew(it) { if (!it.dateAdded) return false; return it.dateAdded === LAST_REFRESHED; }
+function saveMusic(it, value) {
+  const k = itemKey(it);
+  state.music = state.music || {};
+  if (value && value.trim()) state.music[k] = value.trim(); else delete state.music[k];
+  it._musicStyle = state.music[k] || "";
+  it._priority = computePriority(it); it._tier = priorityTier(it._priority);
+  suppressRealtime(); saveState(state);
+}
+function saveOwner(it, name) {
+  const k = itemKey(it);
+  state.owners = state.owners || {};
+  if (name && name.trim()) state.owners[k] = name.trim(); else delete state.owners[k];
+  suppressRealtime(); saveState(state); render();
+}
+function getOwner(it) { return (state.owners && state.owners[it._origKey || itemKey(it)]) || ""; }
 
 items.forEach(it => {
   if (!it.sources || !it.sources.length) {
@@ -1272,32 +1354,39 @@ const q = document.getElementById("q");
 const rangePicker = document.getElementById("rangePicker");
 const dateFromInput = document.getElementById("dateFrom");
 const dateToInput = document.getElementById("dateTo");
-const filters = { status: "all", type: "all", genre: "all", source: "all", dateRange: "all", selectedDate: null, dateFrom: null, dateTo: null, view: "all", priority: "all", license: "all", royalty: "all", rerunProb: "all", q: "" };
+// Multi-select filters use arrays (empty = no filter / all)
+const filters = {
+  status: [], type: [], genre: [], source: [], priority: [], license: [], royalty: [], rerunProb: [],
+  dateRange: "all", selectedDate: null, dateFrom: null, dateTo: null, view: "all", q: ""
+};
 
 function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]); }
 
+const STATUS_LABEL = { renew: "Renewed", cancel: "Canceled", pickup: "Pickup Buzz", indev: "In Development", prepro: "Pre-production", postpro: "Post-production", wrapped: "Wrapped", inprod: "In Production" };
+const STATUS_OPTIONS = ["renew", "cancel", "pickup", "indev", "prepro", "postpro"];
+
 function render() {
   const term = filters.q.trim().toLowerCase();
+  const inSet = (arr, v) => !arr || arr.length === 0 || arr.includes(v);
   const visible = items.map(applyOverlay).filter(it => {
     if (filters.view === "favs" && !isFav(it)) return false;
     if (filters.view === "archived" && !isArchived(it)) return false;
     if (filters.view === "all" && isArchived(it)) return false;
-    if (filters.status !== "all" && it.status !== filters.status) return false;
-    if (filters.type !== "all" && it.type !== filters.type) return false;
-    if (filters.genre !== "all" && it.genre !== filters.genre) return false;
-    if (filters.source !== "all" && it.source !== filters.source) return false;
-    if (filters.dateRange === "new" && !isNew(it)) return false;
-    if (filters.dateRange === "older" && isNew(it)) return false;
+    if (!inSet(filters.status, it.status)) return false;
+    if (!inSet(filters.type, it.type)) return false;
+    if (!inSet(filters.genre, it.genre)) return false;
+    if (!inSet(filters.source, it.source)) return false;
+    if (filters.dateRange === "older" && it.dateAdded === LAST_REFRESHED) return false;
     if (filters.dateRange === "byDate" && filters.selectedDate && it.dateAdded !== filters.selectedDate) return false;
     if (filters.dateRange === "range") {
       if (!it.dateAdded) return false;
       if (filters.dateFrom && it.dateAdded < filters.dateFrom) return false;
       if (filters.dateTo && it.dateAdded > filters.dateTo) return false;
     }
-    if (filters.priority !== "all" && it._tier !== filters.priority) return false;
-    if (filters.license !== "all" && it._covered !== filters.license) return false;
-    if (filters.royalty !== "all" && it._royalty !== filters.royalty) return false;
-    if (filters.rerunProb !== "all" && it._rerunProb !== filters.rerunProb) return false;
+    if (!inSet(filters.priority, it._tier)) return false;
+    if (!inSet(filters.license, it._covered)) return false;
+    if (!inSet(filters.royalty, it._royalty)) return false;
+    if (!inSet(filters.rerunProb, it._rerunProb)) return false;
     if (term) {
       const blob = (it.title + " " + it.network + " " + it.studio + " " + it.detail + " " + (it._musicStyle||"")).toLowerCase();
       if (!blob.includes(term)) return false;
@@ -1311,25 +1400,34 @@ function render() {
   stats.textContent = visible.length + " of " + items.length + " shown · " +
     (tierCounts.high||0) + " high-priority · " + (tierCounts.med||0) + " medium · " + (tierCounts.low||0) + " low · " +
     yes + " covered, " + no + " not covered · " +
-    (counts.renew||0) + " renewed · " + (counts.inprod||0) + " in prod · " + (counts.wrapped||0) + " wrapped";
+    (counts.renew||0) + " renewed · " + (counts.prepro||0) + " pre-prod · " + (counts.postpro||0) + " post-prod";
   if (!visible.length) { list.innerHTML = '<div class="empty">No shows match these filters.</div>'; return; }
   list.innerHTML = visible.map(it => {
-    const isNewItem = isNew(it); const fav = isFav(it); const archived = isArchived(it); const edited = isEdited(it);
-    // Use _origKey if applyOverlay preserved one (i.e. this row's title was
-    // edited and itemKey(it) would now resolve to the NEW title's key, which
-    // doesn't exist in the raw items[] array). Otherwise fall back to itemKey.
+    const fav = isFav(it); const archived = isArchived(it); const edited = isEdited(it);
     const k = it._origKey || itemKey(it);
     const sources = (it.sources && it.sources.length) ? it.sources : [["Search Google","https://www.google.com/search?q=" + encodeURIComponent(it.title)]];
     const covered = it._covered || "Unknown";
-    const reachCta = (covered === "Yes") ? `<a class="reach-cta" href="#" data-action="reach" data-key="${esc(k)}">✉ Reach Out to Contact</a>` : "";
+    const statusLbl = it.statusLabel || STATUS_LABEL[it.status] || it.status;
+    const musicVal = it._musicStyle || "";
+    const owner = getOwner(it);
+    const ownerHtml = owner
+      ? `<div class="owner-row" data-owner-key="${esc(k)}">
+           <span class="owner-label">Owner</span>
+           <span class="owner-name">${esc(owner)}</span>
+           <button type="button" class="owner-release-btn" data-action="release-owner" data-key="${esc(k)}" title="Release ownership">Release</button>
+         </div>`
+      : `<div class="owner-row" data-owner-key="${esc(k)}">
+           <span class="owner-label">Unclaimed</span>
+           <button type="button" class="owner-claim-btn" data-action="claim-owner" data-key="${esc(k)}">Claim ownership</button>
+         </div>`;
     return `
-    <div class="row proto${isNewItem ? ' is-new' : ''}${fav ? ' is-fav' : ''}${archived ? ' is-archived' : ''}${edited ? ' is-edited' : ''}" data-key="${esc(k)}">
+    <div class="row proto s-${esc(it.status)}${fav ? ' is-fav' : ''}${archived ? ' is-archived' : ''}${edited ? ' is-edited' : ''}" data-key="${esc(k)}">
       <div class="badge-stack">
-        <span class="badge b-${it.status}">${esc(it.statusLabel)}</span>
+        <span class="badge b-${it.status}">${esc(statusLbl)}</span>
         <span class="priority p-${it._tier}">${it._tier.toUpperCase()} <span class="score">· ${it._priority}</span></span>
       </div>
       <div>
-        <div class="title">${esc(it.title)}${isNewItem ? '<span class="new-tag">New</span>' : ''}</div>
+        <div class="title">${esc(it.title)}</div>
         <div class="meta">
           <span class="net">${esc(it.network)}</span>
           <span class="net-tag ${it.type}">${esc(it.type)}</span>
@@ -1344,9 +1442,9 @@ function render() {
           <span class="sig pot-${it._royalty}${it._royaltySource==='db'?' from-db':''}"><span class="k">Royalty Potential</span> ${it._royalty}</span>
           <span class="sig prob-${it._rerunProb}${it._rerunSource==='db'?' from-db':''}"><span class="k">Rerun Probability</span> ${it._rerunProb}</span>
           <span class="sig cov-${covered}${it._licenseSource==='db'?' from-db':''}"><span class="k">Covered Under License</span> ${covered}</span>
-          <span class="sig"><span class="k">Music</span> ${esc(it._musicStyle)}</span>
+          <span class="sig music-edit"><span class="k">Music</span><input type="text" data-action="music-input" data-key="${esc(k)}" value="${esc(musicVal)}" placeholder="Add music style…"></span>
         </div>
-        ${reachCta}
+        ${ownerHtml}
         <div class="src">${sources.map(s => `<a href="${esc(s[1])}" target="_blank" rel="noopener">${esc(s[0])} ↗</a>`).join("")}</div>
         <div class="row-actions">
           <span class="icon-btn fav ${fav ? 'on' : ''}" data-action="fav" data-key="${esc(k)}">${fav ? '★' : '☆'}</span>
@@ -1359,7 +1457,7 @@ function render() {
           <label>Network</label><input data-field="network" value="${esc(it.network)}">
           <label>Studio</label><input data-field="studio" value="${esc(it.studio)}">
           <label>Status</label>
-          <select data-field="status">${["renew","cancel","pickup","wrapped","inprod"].map(s => `<option value="${s}"${s===it.status?' selected':''}>${({renew:"Renewed",cancel:"Canceled",pickup:"Pickup",wrapped:"Just Wrapped",inprod:"In Production"})[s]}</option>`).join("")}</select>
+          <select data-field="status">${STATUS_OPTIONS.map(s => `<option value="${s}"${s===it.status?' selected':''}>${STATUS_LABEL[s]}</option>`).join("")}</select>
           <label>Status Label</label><input data-field="statusLabel" value="${esc(it.statusLabel)}">
           <label>Type</label>
           <select data-field="type">${["broadcast","cable","streaming"].map(t => `<option value="${t}"${t===it.type?' selected':''}>${t}</option>`).join("")}</select>
@@ -1379,13 +1477,31 @@ function render() {
       </div>
     </div>`;
   }).join("");
+  // Inline music inputs: persist on blur and on Enter
+  list.querySelectorAll('input[data-action="music-input"]').forEach(inp => {
+    inp.addEventListener("blur", e => {
+      const key = e.target.dataset.key;
+      const baseItem = items.find(i => itemKey(i) === key); if (!baseItem) return;
+      saveMusic(baseItem, e.target.value);
+    });
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") e.target.blur(); });
+    inp.addEventListener("click", e => e.stopPropagation());
+  });
   list.querySelectorAll("[data-action]").forEach(el => {
+    if (el.matches('input[data-action="music-input"]')) return;
     el.addEventListener("click", e => {
       const action = el.dataset.action; const key = el.dataset.key;
       const baseItem = items.find(i => itemKey(i) === key); if (!baseItem) return;
       if (action === "fav") toggleFav(baseItem);
       else if (action === "archive") toggleArchive(baseItem);
       else if (action === "revert") revertEdit(baseItem);
+      else if (action === "claim-owner") {
+        const name = prompt("Claim ownership of \"" + baseItem.title + "\".\nEnter your name:");
+        if (name && name.trim()) saveOwner(baseItem, name);
+      }
+      else if (action === "release-owner") {
+        if (confirm("Release ownership of \"" + baseItem.title + "\"?")) saveOwner(baseItem, "");
+      }
       else if (action === "edit") { const form = list.querySelector('[data-form="' + CSS.escape(key) + '"]'); if (form) form.classList.toggle("open"); }
       else if (action === "cancelEdit") { const form = list.querySelector('[data-form="' + CSS.escape(key) + '"]'); if (form) form.classList.remove("open"); }
       else if (action === "saveEdit") {
@@ -1402,15 +1518,65 @@ function render() {
         const idx = items.indexOf(baseItem); if (idx > -1) items.splice(idx, 1); render();
         suppressRealtime(); slDeleteItem(baseItem);
       }
-      else if (action === "reach") {
-        e.preventDefault();
-        const overlay = applyOverlay(baseItem);
-        alert("Outreach draft (prototype stub)\n\nShow: " + overlay.title + "\nNetwork: " + overlay.network + "\nStudio: " + overlay.studio + "\nCovered: " + overlay._covered + (overlay._licenseEntity ? " · via " + overlay._licenseEntity : "") + "\nRoyalty: " + overlay._royalty + " · Rerun: " + overlay._rerunProb + "\nMusic angle: " + overlay._musicStyle);
-      }
     });
   });
 }
 
+// === Multi-select filter widget setup =============================================
+function setupMultiSelects() {
+  document.querySelectorAll(".ms-filter").forEach(ms => {
+    const filterKey = ms.dataset.filter;
+    const btn = ms.querySelector(".ms-btn");
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const wasOpen = ms.classList.contains("open");
+      document.querySelectorAll(".ms-filter.open").forEach(x => x.classList.remove("open"));
+      if (!wasOpen) ms.classList.add("open");
+    });
+    ms.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener("change", () => {
+        const checked = Array.from(ms.querySelectorAll('input[type="checkbox"]:checked')).map(c => c.value);
+        filters[filterKey] = checked;
+        updateMsLabel(ms, checked);
+        render();
+      });
+    });
+    const clearBtn = ms.querySelector(".ms-clear");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", e => {
+        e.stopPropagation();
+        ms.querySelectorAll('input[type="checkbox"]').forEach(c => c.checked = false);
+        filters[filterKey] = [];
+        updateMsLabel(ms, []);
+        render();
+      });
+    }
+    updateMsLabel(ms, []);
+  });
+  document.addEventListener("click", e => {
+    if (!e.target.closest(".ms-filter")) {
+      document.querySelectorAll(".ms-filter.open").forEach(x => x.classList.remove("open"));
+    }
+  });
+}
+function updateMsLabel(ms, checked) {
+  const countEl = ms.querySelector(".ms-count");
+  const btn = ms.querySelector(".ms-btn");
+  if (!checked.length) {
+    countEl.textContent = "All";
+    btn.classList.remove("has-selection");
+  } else if (checked.length === 1) {
+    const cb = ms.querySelector('input[type="checkbox"][value="' + CSS.escape(checked[0]) + '"]');
+    const lbl = cb ? cb.closest("label").textContent.trim() : checked[0];
+    countEl.textContent = lbl;
+    btn.classList.add("has-selection");
+  } else {
+    countEl.textContent = checked.length + " selected";
+    btn.classList.add("has-selection");
+  }
+}
+
+// === Single-select filters (dateRange, view) ======================================
 document.querySelectorAll('.toolbar select[data-filter]').forEach(sel => {
   sel.addEventListener('change', e => {
     const f = e.target.dataset.filter; const val = e.target.value; filters[f] = val;
@@ -1436,34 +1602,29 @@ dateToInput.addEventListener("change", e => { filters.dateTo = e.target.value ||
 document.getElementById("rangeClear").addEventListener("click", () => { filters.dateFrom = null; filters.dateTo = null; dateFromInput.value = ""; dateToInput.value = ""; render(); });
 q.addEventListener("input", e => { filters.q = e.target.value; render(); });
 document.getElementById("sortBy").addEventListener("change", e => { sortItems(e.target.value); render(); });
-document.querySelectorAll(".proto-banner .src-pill").forEach(pill => {
-  pill.addEventListener("click", () => {
-    if (pill.dataset.tabLink) { switchTab(pill.dataset.tabLink); return; }
-    if (pill.dataset.src === "musicusage") alert("Music Usage Intelligence (mock). Real integration: ingest audio fingerprint / cue-sheet data per show.");
-  });
-});
 
 function csvCell(v) { if (v == null) return ""; const s = String(v); if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'; return s; }
 function exportCsv() {
   const term = filters.q.trim().toLowerCase();
+  const inSet = (arr, v) => !arr || arr.length === 0 || arr.includes(v);
   const rows = items.map(applyOverlay).filter(it => {
     if (filters.view === "favs" && !isFav(it)) return false;
     if (filters.view === "archived" && !isArchived(it)) return false;
     if (filters.view === "all" && isArchived(it)) return false;
-    if (filters.status !== "all" && it.status !== filters.status) return false;
-    if (filters.type !== "all" && it.type !== filters.type) return false;
-    if (filters.genre !== "all" && it.genre !== filters.genre) return false;
-    if (filters.source !== "all" && it.source !== filters.source) return false;
-    if (filters.priority !== "all" && it._tier !== filters.priority) return false;
-    if (filters.license !== "all" && it._covered !== filters.license) return false;
-    if (filters.royalty !== "all" && it._royalty !== filters.royalty) return false;
-    if (filters.rerunProb !== "all" && it._rerunProb !== filters.rerunProb) return false;
+    if (!inSet(filters.status, it.status)) return false;
+    if (!inSet(filters.type, it.type)) return false;
+    if (!inSet(filters.genre, it.genre)) return false;
+    if (!inSet(filters.source, it.source)) return false;
+    if (!inSet(filters.priority, it._tier)) return false;
+    if (!inSet(filters.license, it._covered)) return false;
+    if (!inSet(filters.royalty, it._royalty)) return false;
+    if (!inSet(filters.rerunProb, it._rerunProb)) return false;
     if (term && !(it.title + " " + it.network + " " + it.studio + " " + it.detail).toLowerCase().includes(term)) return false;
     return true;
   });
-  const headers = ["Title","Priority Tier","Priority Score","Royalty Potential","Rerun Probability","Covered Under License","Music Style","Status","Status Label","Network","Type","Genre","Studio","Source","Date Added","Detail","Production","User-added"];
+  const headers = ["Title","Priority Tier","Priority Score","Royalty Potential","Rerun Probability","Covered Under License","Music Style","Status","Status Label","Owner","Network","Type","Genre","Studio","Source","Date Added","Detail","Production","User-added"];
   const lines = [headers.map(csvCell).join(",")];
-  rows.forEach(it => lines.push([it.title, it._tier, it._priority, it._royalty, it._rerunProb, it._covered, it._musicStyle, it.status, it.statusLabel, it.network, it.type, it.genre || "", it.studio, it.source, it.dateAdded || "", it.detail, it.prod || "", it._userAdded ? "yes" : ""].map(csvCell).join(",")));
+  rows.forEach(it => lines.push([it.title, it._tier, it._priority, it._royalty, it._rerunProb, it._covered, it._musicStyle, it.status, it.statusLabel, getOwner(it), it.network, it.type, it.genre || "", it.studio, it.source, it.dateAdded || "", it.detail, it.prod || "", it._userAdded ? "yes" : ""].map(csvCell).join(",")));
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1473,8 +1634,6 @@ function exportCsv() {
 }
 document.getElementById("exportCsv").addEventListener("click", exportCsv);
 
-// Manual sync: one MCP call, refreshes channels+agreements+state in the artifact.
-// On the Vercel site this just kicks the existing pollAllRemote.
 async function _doManualSync(btn) {
   const orig = btn ? btn.textContent : null;
   if (btn) { btn.disabled = true; btn.textContent = "↻ Syncing…"; }
@@ -1486,7 +1645,12 @@ async function _doManualSync(btn) {
         if (Array.isArray(bundle.agreements)) agreements = bundle.agreements.map(_mapAgreement);
         if (bundle.state) {
           const s = bundle.state;
-          state = { favs: s.favs || {}, archived: s.archived || {}, edits: s.edits || {}, added: s.added || [] };
+          const ed = s.edits || {};
+          const music = (ed.__music && typeof ed.__music === 'object') ? ed.__music : {};
+          const owners = (ed.__owners && typeof ed.__owners === 'object') ? ed.__owners : {};
+          const cleanEdits = Object.assign({}, ed);
+          delete cleanEdits.__music; delete cleanEdits.__owners;
+          state = { favs: s.favs || {}, archived: s.archived || {}, edits: cleanEdits, added: s.added || [], music, owners };
         }
         try {
           localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(channels));
@@ -1521,7 +1685,7 @@ document.getElementById("addShow").addEventListener("click", async () => {
   const today = new Date().toISOString().slice(0,10);
   let n = 1; let title = "New show";
   while (items.find(it => (it.title||"").toLowerCase() === title.toLowerCase())) { n += 1; title = "New show " + n; }
-  const newItem = { source: "trade", title, genre: "scripted", network: "", type: "streaming", studio: "", status: "inprod", statusLabel: "In Production", detail: "", prod: "", sources: [], dateAdded: today };
+  const newItem = { source: "trade", title, genre: "scripted", network: "", type: "streaming", studio: "", status: "indev", statusLabel: "In Development", detail: "", prod: "", sources: [], dateAdded: today };
   items.unshift(newItem); recomputeAllSignals();
   const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value); render();
   suppressRealtime(); await slSaveItem(newItem);
@@ -1637,16 +1801,13 @@ function renderChannels() {
       updateBannerCounts();
     });
     if (el.tagName === "TEXTAREA") {
-      // Debounced input-event save: flushes ~900ms after the last keystroke
-      // so polling-induced re-renders can't destroy in-flight edits before
-      // blur fires. Blur cancels the pending timer and saves immediately.
       el.addEventListener("input", e => {
         clearTimeout(e.target._saveTimer);
         e.target._saveTimer = setTimeout(() => {
           const tr = e.target.closest("tr"); if (!tr) return;
           const idx = parseInt(tr.dataset.idx);
           const field = e.target.dataset.field; if (!field) return;
-          if (channels[idx] && channels[idx][field] === e.target.value) return; // no change
+          if (channels[idx] && channels[idx][field] === e.target.value) return;
           channels[idx][field] = e.target.value;
           suppressRealtime(); chSaveRow(channels[idx]);
         }, 900);
@@ -1684,7 +1845,6 @@ function chUpdateStats() {
   const avg = total ? Math.round(channels.reduce((s,c) => s + (parseInt(c.proPayout)||0), 0) / total) : 0;
   const summary = `${total} channels · Royalty High ${pH} / Med ${pM} / Low ${pL} · Rerun High ${rH} / Med ${rM} / Low ${rL} · Avg payout ${avg}/100`;
   const s = document.getElementById("ch-stats"); if (s) s.textContent = summary;
-  const b = document.getElementById("ch-bannerStats"); if (b) b.textContent = summary;
 }
 document.getElementById("ch-addRow").addEventListener("click", () => {
   const newRow = { name: "New channel", type: "cable", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "" };
@@ -1874,7 +2034,6 @@ function agUpdateStats() {
   const tpsP = agreements.filter(a => a.thirdPartySync === "Partial (see notes)").length;
   const summary = `${total} entities · Covered Yes ${yes} / No ${no} · Third-Party Sync Yes ${tpsY} / Partial ${tpsP} / No ${tpsN}`;
   const s = document.getElementById("ag-stats"); if (s) s.textContent = summary;
-  const b = document.getElementById("ag-bannerStats"); if (b) b.textContent = summary;
 }
 document.getElementById("ag-addRow").addEventListener("click", () => {
   const newRow = { entity: "New entity", entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "", status: "active", salesforceUrl: "", territories: "", contentTypes: [], notes: "" };
