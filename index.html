@@ -156,8 +156,30 @@
   .sig.prob-Low     { background: #e6efe9; border-color: #b7d4c2; color: #3a6650; }
   .sig.prob-Low .k  { color: #3a6650; }
 
-  .row.proto { grid-template-columns: 150px 1fr; }
+  .row.proto { grid-template-columns: 150px 1fr 260px; }
   .row.proto .badge-stack { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+  .badge-stack .status-sub { font-size: 11px; color: var(--muted); line-height: 1.3;
+    padding: 0 2px; font-style: italic; max-width: 140px; }
+  .row.proto .badge.prod-badge { font-size: 13px; padding: 6px 13px; font-weight: 800; }
+  .row.proto .badge.market-badge { font-size: 11px; padding: 3px 9px; font-weight: 600; opacity: .92; }
+  .entry-notes { border-left: 1px solid var(--border); padding-left: 12px; display: flex; flex-direction: column; }
+  .entry-notes .notes-label { font-size: 10px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  .entry-notes .notes-area { flex: 1; min-height: 90px; resize: vertical;
+    width: 100%; padding: 8px 10px; font-size: 12.5px; line-height: 1.45;
+    border: 1px solid var(--border-strong); border-radius: 6px;
+    background: #fffdf8; color: var(--text); font-family: inherit; }
+  .entry-notes .notes-area:focus { outline: none; border-color: var(--accent); background: #fff; }
+  .contact-check { display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border: 1px solid var(--border-strong); border-radius: 6px;
+    background: #fff; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; user-select: none; }
+  .contact-check input { margin: 0; cursor: pointer; }
+  .contact-check.on { background: #e6f3eb; color: var(--renew); border-color: #b7d4c2; }
+  @media (max-width: 820px) {
+    .row.proto { grid-template-columns: 150px 1fr; }
+    .entry-notes { grid-column: 1 / -1; border-left: none; border-top: 1px dashed var(--border);
+      padding-left: 0; padding-top: 10px; margin-top: 4px; }
+  }
 
   .proto-tabs { display: flex; gap: 2px; margin-bottom: 14px;
     border-bottom: 1px solid var(--border); }
@@ -380,15 +402,22 @@
           <button type="button" class="ms-clear">Clear all</button>
         </div>
       </div>
+      <div class="ms-filter" data-filter="production">
+        <button class="ms-btn" type="button">Production: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <label><input type="checkbox" value="indev"> In Development</label>
+          <label><input type="checkbox" value="prepro"> Pre-production</label>
+          <label><input type="checkbox" value="inprod"> In Production</label>
+          <label><input type="checkbox" value="postpro"> Post-production</label>
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
       <div class="ms-filter" data-filter="status">
         <button class="ms-btn" type="button">Status: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
         <div class="ms-menu">
           <label><input type="checkbox" value="renew"> Renewed</label>
           <label><input type="checkbox" value="cancel"> Canceled</label>
           <label><input type="checkbox" value="pickup"> Pickup Buzz</label>
-          <label><input type="checkbox" value="indev"> In Development</label>
-          <label><input type="checkbox" value="prepro"> Pre-production</label>
-          <label><input type="checkbox" value="postpro"> Post-production</label>
           <button type="button" class="ms-clear">Clear all</button>
         </div>
       </div>
@@ -439,17 +468,18 @@
       <div class="sub">Channel-level Royalty Potential, payout, and rerun probability data. Expand a row to add detailed notes. Edits flow into the Slate's priority score.</div></header>
     <div class="dash-toolbar">
       <input type="search" id="ch-q" placeholder="Search channel name or notes…">
+      <label class="filter-group">Organize <select id="ch-sort"><option value="alpha">Alphabetical (A–Z)</option><option value="recent">Recently added</option><option value="group">Group by parent company</option></select></label>
       <button class="btn btn-primary" id="ch-addRow">+ Add channel</button>
       <button class="btn" id="ch-sync" title="Pull the latest team edits from Supabase">↻ Sync from team</button>
-      <button class="btn" id="ch-resetData">↻ Reset to defaults</button>
       <button class="btn" id="ch-exportCsv">⤓ Export CSV</button>
     </div>
     <div class="stats" id="ch-stats"></div>
     <table class="data-table">
       <thead><tr>
-        <th style="width:220px;">Channel / Network</th>
-        <th style="width:110px;">Type</th>
-        <th style="width:150px;">Royalty Potential</th>
+        <th style="width:200px;">Channel / Network</th>
+        <th style="width:150px;">Type</th>
+        <th style="width:160px;">Parent Company</th>
+        <th style="width:140px;">Royalty Potential</th>
         <th style="width:130px;">Payout (0–100)</th>
         <th style="width:150px;">Rerun Probability</th>
         <th style="width:60px;">Notes</th>
@@ -674,10 +704,10 @@ async function sbUpsert(path, body) {
     if (!body || !body.length) return;
     if (path === '/rest/v1/channels') {
       const tuples = body.map(c => "(" +
-        _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
+        _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parent_company || '') + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
         _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", NOW())").join(", ");
-      const sql = "INSERT INTO channels (name, type, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES " + tuples +
-        " ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, royalty_potential=EXCLUDED.royalty_potential, " +
+      const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES " + tuples +
+        " ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, parent_company=EXCLUDED.parent_company, royalty_potential=EXCLUDED.royalty_potential, " +
         "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, updated_at=NOW()";
       await _mcpSql(sql);
       return;
@@ -754,11 +784,10 @@ const ST_LS_KEY_SB = 'tv-tracker-state-v1';
 // Migrate legacy status values to the new 6-status schema.
 function _migrateStatus(s) {
   if (s === 'wrapped') return 'postpro';
-  if (s === 'inprod')  return 'prepro';
   return s || 'renew';
 }
 
-function _mapChannel(c) { return { name: c.name, type: c.type, royaltyPotential: c.royalty_potential, proPayout: c.pro_payout, rerunProbability: c.rerun_probability, notes: c.notes || '' }; }
+function _mapChannel(c) { return { name: c.name, type: chNormType(c.type), parentCompany: c.parent_company || '', royaltyPotential: c.royalty_potential, proPayout: c.pro_payout, rerunProbability: c.rerun_probability, notes: c.notes || '', updatedAt: c.updated_at || '' }; }
 function _mapAgreement(a) { return { entity: a.entity, entityType: a.entity_type, scope: a.scope, thirdPartySync: a.third_party_sync, renewalDate: a.renewal_date || '', status: a.status, salesforceUrl: a.salesforce_url || '', territories: a.territories || '', contentTypes: Array.isArray(a.content_types) ? a.content_types : [], notes: a.notes || '' }; }
 function _mapItem(r) {
   return {
@@ -772,6 +801,7 @@ function _mapItem(r) {
     statusLabel: r.status_label || '',
     detail: r.detail || '',
     prod: r.prod || '',
+    airDate: r.air_date || '',
     sources: Array.isArray(r.sources) ? r.sources : [],
     dateAdded: r.date_added || ''
   };
@@ -781,15 +811,15 @@ function _itemId(it) { return (it.title || '').toLowerCase().trim() + '|' + (it.
 async function slSaveItem(it) {
   const id = _itemId(it);
   if (IS_COWORK) {
-    const sql = "INSERT INTO slate_items (id, source, title, network, type, genre, studio, status, status_label, detail, prod, sources, date_added, updated_at) VALUES (" +
+    const sql = "INSERT INTO slate_items (id, source, title, network, type, genre, studio, status, status_label, detail, prod, air_date, sources, date_added, updated_at) VALUES (" +
       _sqlStr(id) + ", " + _sqlStr(it.source || 'trade') + ", " + _sqlStr(it.title || '') + ", " +
       _sqlStr(it.network || '') + ", " + _sqlStr(it.type || 'streaming') + ", " + _sqlStr(it.genre || 'scripted') + ", " +
       _sqlStr(it.studio || '') + ", " + _sqlStr(it.status || 'renew') + ", " + _sqlStr(it.statusLabel || '') + ", " +
-      _sqlStr(it.detail || '') + ", " + _sqlStr(it.prod || '') + ", " + _sqlJson(it.sources || []) + ", " +
+      _sqlStr(it.detail || '') + ", " + _sqlStr(it.prod || '') + ", " + _sqlStr(it.airDate || '') + ", " + _sqlJson(it.sources || []) + ", " +
       _sqlStr(it.dateAdded || '') + ", NOW()) " +
       "ON CONFLICT (id) DO UPDATE SET source=EXCLUDED.source, title=EXCLUDED.title, network=EXCLUDED.network, " +
       "type=EXCLUDED.type, genre=EXCLUDED.genre, studio=EXCLUDED.studio, status=EXCLUDED.status, " +
-      "status_label=EXCLUDED.status_label, detail=EXCLUDED.detail, prod=EXCLUDED.prod, " +
+      "status_label=EXCLUDED.status_label, detail=EXCLUDED.detail, prod=EXCLUDED.prod, air_date=EXCLUDED.air_date, " +
       "sources=EXCLUDED.sources, date_added=EXCLUDED.date_added, updated_at=NOW()";
     await _mcpSql(sql);
     return;
@@ -798,7 +828,7 @@ async function slSaveItem(it) {
     id: id, source: it.source || 'trade', title: it.title || '', network: it.network || '',
     type: it.type || 'streaming', genre: it.genre || 'scripted', studio: it.studio || '',
     status: it.status || 'renew', status_label: it.statusLabel || '',
-    detail: it.detail || '', prod: it.prod || '', sources: it.sources || [],
+    detail: it.detail || '', prod: it.prod || '', air_date: it.airDate || '', sources: it.sources || [],
     date_added: it.dateAdded || '', updated_at: new Date().toISOString()
   }];
   const url = SB_URL + '/rest/v1/slate_items?on_conflict=id';
@@ -839,15 +869,15 @@ async function chSaveRow(c) {
     localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(all));
   } catch {}
   if (IS_COWORK) {
-    const sql = "INSERT INTO channels (name, type, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES (" +
-      _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.royaltyPotential) + ", " + _sqlNum(c.proPayout) + ", " +
+    const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES (" +
+      _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parentCompany || '') + ", " + _sqlStr(c.royaltyPotential) + ", " + _sqlNum(c.proPayout) + ", " +
       _sqlStr(c.rerunProbability) + ", " + _sqlStr(c.notes || '') + ", NOW()) " +
-      "ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, royalty_potential=EXCLUDED.royalty_potential, " +
+      "ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, parent_company=EXCLUDED.parent_company, royalty_potential=EXCLUDED.royalty_potential, " +
       "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, updated_at=NOW()";
     await _mcpSql(sql);
     return;
   }
-  await sbUpsert('/rest/v1/channels', [{ name: c.name, type: c.type, royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }]);
+  await sbUpsert('/rest/v1/channels', [{ name: c.name, type: c.type, parent_company: c.parentCompany || '', royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }]);
 }
 async function chDeleteRow(name) {
   try {
@@ -890,15 +920,15 @@ async function agDeleteRow(entity) {
 
 async function chSave(arr) {
   try { localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(arr)); } catch {}
-  const rows = arr.map(c => ({ name: c.name, type: c.type, royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }));
+  const rows = arr.map(c => ({ name: c.name, type: c.type, parent_company: c.parentCompany || '', royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }));
   if (IS_COWORK) {
     if (!rows.length) return;
     const tuples = rows.map(c => "(" +
-      _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
+      _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parent_company || '') + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
       _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", NOW())").join(", ");
     const nameList = rows.map(c => _sqlStr(c.name)).join(", ");
-    const sql = "INSERT INTO channels (name, type, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES " + tuples +
-      " ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, royalty_potential=EXCLUDED.royalty_potential, " +
+    const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES " + tuples +
+      " ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, parent_company=EXCLUDED.parent_company, royalty_potential=EXCLUDED.royalty_potential, " +
       "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, updated_at=NOW(); " +
       "DELETE FROM channels WHERE name NOT IN (" + nameList + ")";
     await _mcpSql(sql);
@@ -939,21 +969,24 @@ async function agSave(arr) {
 }
 async function loadState() {
   const data = await sbGet('/rest/v1/slate_state?id=eq.singleton&select=*');
-  if (!data || !data.length) return { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {}, last_refreshed: LAST_REFRESHED };
+  if (!data || !data.length) return { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {}, contacted: {}, itemNotes: {}, prodStatus: {}, last_refreshed: LAST_REFRESHED };
   const ed = data[0].edits || {};
-  // Pull music/owners out of edits sub-objects (we piggyback on the existing JSONB edits column).
+  // Pull music/owners/contacted/notes/prodStatus out of edits sub-objects (we piggyback on the existing JSONB edits column).
   const music = (ed.__music && typeof ed.__music === 'object') ? ed.__music : {};
   const owners = (ed.__owners && typeof ed.__owners === 'object') ? ed.__owners : {};
+  const contacted = (ed.__contacted && typeof ed.__contacted === 'object') ? ed.__contacted : {};
+  const itemNotes = (ed.__notes && typeof ed.__notes === 'object') ? ed.__notes : {};
+  const prodStatus = (ed.__prodstatus && typeof ed.__prodstatus === 'object') ? ed.__prodstatus : {};
   const cleanEdits = Object.assign({}, ed);
-  delete cleanEdits.__music; delete cleanEdits.__owners;
-  const s = { favs: data[0].favs || {}, archived: data[0].archived || {}, edits: cleanEdits, added: data[0].added || [], music, owners, last_refreshed: data[0].last_refreshed || LAST_REFRESHED };
+  delete cleanEdits.__music; delete cleanEdits.__owners; delete cleanEdits.__contacted; delete cleanEdits.__notes; delete cleanEdits.__prodstatus;
+  const s = { favs: data[0].favs || {}, archived: data[0].archived || {}, edits: cleanEdits, added: data[0].added || [], music, owners, contacted, itemNotes, prodStatus, last_refreshed: data[0].last_refreshed || LAST_REFRESHED };
   try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
   return s;
 }
 async function saveState(s) {
   try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
   // Pack music/owners into the edits JSONB so we don't need a schema change.
-  const editsPayload = Object.assign({}, s.edits || {}, { __music: s.music || {}, __owners: s.owners || {} });
+  const editsPayload = Object.assign({}, s.edits || {}, { __music: s.music || {}, __owners: s.owners || {}, __contacted: s.contacted || {}, __notes: s.itemNotes || {}, __prodstatus: s.prodStatus || {} });
   sbPatch('/rest/v1/slate_state?id=eq.singleton', { favs: s.favs, archived: s.archived, edits: editsPayload, added: s.added, updated_at: new Date().toISOString() });
 }
 
@@ -1048,6 +1081,8 @@ async function pollRemoteState() {
     state.favs = state.favs || {}; state.archived = state.archived || {};
     state.edits = state.edits || {}; state.added = state.added || [];
     state.music = state.music || {}; state.owners = state.owners || {};
+  state.contacted = state.contacted || {}; state.itemNotes = state.itemNotes || {};
+  state.prodStatus = state.prodStatus || {};
     if (state.added.length) {
       state.added.forEach(a => {
         if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) {
@@ -1199,7 +1234,7 @@ recomputeAllSignals();
 // === Async app init ===============================================================
 let channels = [];
 let agreements = [];
-let state = { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {} };
+let state = { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {}, contacted: {}, itemNotes: {}, prodStatus: {} };
 
 async function initApp() {
   try { _renderMcpDiagBadge(); } catch {}
@@ -1214,9 +1249,12 @@ async function initApp() {
         const ed = s.edits || {};
         const music = (ed.__music && typeof ed.__music === 'object') ? ed.__music : {};
         const owners = (ed.__owners && typeof ed.__owners === 'object') ? ed.__owners : {};
+        const contacted = (ed.__contacted && typeof ed.__contacted === 'object') ? ed.__contacted : {};
+        const itemNotes = (ed.__notes && typeof ed.__notes === 'object') ? ed.__notes : {};
+        const prodStatus = (ed.__prodstatus && typeof ed.__prodstatus === 'object') ? ed.__prodstatus : {};
         const cleanEdits = Object.assign({}, ed);
-        delete cleanEdits.__music; delete cleanEdits.__owners;
-        state = { favs: s.favs || {}, archived: s.archived || {}, edits: cleanEdits, added: s.added || [], music, owners };
+        delete cleanEdits.__music; delete cleanEdits.__owners; delete cleanEdits.__contacted; delete cleanEdits.__notes; delete cleanEdits.__prodstatus;
+        state = { favs: s.favs || {}, archived: s.archived || {}, edits: cleanEdits, added: s.added || [], music, owners, contacted, itemNotes, prodStatus };
         if (s.last_refreshed) LAST_REFRESHED = s.last_refreshed;
       }
       try {
@@ -1243,6 +1281,8 @@ async function initApp() {
   state.favs = state.favs || {}; state.archived = state.archived || {};
   state.edits = state.edits || {}; state.added = state.added || [];
   state.music = state.music || {}; state.owners = state.owners || {};
+  state.contacted = state.contacted || {}; state.itemNotes = state.itemNotes || {};
+  state.prodStatus = state.prodStatus || {};
   if (state.added.length) {
     state.added.forEach(a => { if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) items.unshift({ ...a, _userAdded: true }); });
   }
@@ -1330,6 +1370,43 @@ function saveOwner(it, name) {
   suppressRealtime(); saveState(state); render();
 }
 function getOwner(it) { return (state.owners && state.owners[it._origKey || itemKey(it)]) || ""; }
+function isContacted(it) { return !!(state.contacted && state.contacted[it._origKey || itemKey(it)]); }
+function toggleContacted(it) {
+  const k = itemKey(it);
+  state.contacted = state.contacted || {};
+  if (state.contacted[k]) delete state.contacted[k]; else state.contacted[k] = true;
+  suppressRealtime(); saveState(state); render();
+}
+function getNote(it) { return (state.itemNotes && state.itemNotes[it._origKey || itemKey(it)]) || ""; }
+function saveNote(it, value) {
+  const k = itemKey(it);
+  state.itemNotes = state.itemNotes || {};
+  if (value && value.trim()) state.itemNotes[k] = value; else delete state.itemNotes[k];
+  suppressRealtime(); saveState(state);
+}
+function _deriveProdFromText(t) {
+  const s = (t || "").toLowerCase();
+  if (!s) return "";
+  if (/post[\s-]*pro/.test(s)) return "postpro";
+  if (/wrapped|wrap(?:ped)?\b|completed filming|finished filming/.test(s)) return "postpro";
+  if (/pre[\s-]*pro/.test(s)) return "prepro";
+  if (/in development|in dev\b|early development|development\b/.test(s)) return "indev";
+  if (/in production|principal photography|currently (?:filming|shooting)|now (?:filming|shooting)|filming|shooting|production/.test(s)) return "inprod";
+  return "";
+}
+function getProdStatus(it) {
+  const k = it._origKey || itemKey(it);
+  if (state.prodStatus && Object.prototype.hasOwnProperty.call(state.prodStatus, k)) return state.prodStatus[k];
+  if (PROD_STATUSES.includes(it.status)) return it.status;
+  // Fall back to parsing the free-text production / status-label fields.
+  return _deriveProdFromText(it.prod) || _deriveProdFromText(it.statusLabel) || "";
+}
+function setProdStatus(it, val) {
+  const k = itemKey(it);
+  state.prodStatus = state.prodStatus || {};
+  state.prodStatus[k] = PROD_STATUSES.includes(val) ? val : "";
+  suppressRealtime(); saveState(state);
+}
 
 items.forEach(it => {
   if (!it.sources || !it.sources.length) {
@@ -1356,14 +1433,18 @@ const dateFromInput = document.getElementById("dateFrom");
 const dateToInput = document.getElementById("dateTo");
 // Multi-select filters use arrays (empty = no filter / all)
 const filters = {
-  status: [], type: [], genre: [], source: [], priority: [], license: [], royalty: [], rerunProb: [],
+  status: [], production: [], type: [], genre: [], source: [], priority: [], license: [], royalty: [], rerunProb: [],
   dateRange: "all", selectedDate: null, dateFrom: null, dateTo: null, view: "all", q: ""
 };
 
 function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]); }
 
 const STATUS_LABEL = { renew: "Renewed", cancel: "Canceled", pickup: "Pickup Buzz", indev: "In Development", prepro: "Pre-production", postpro: "Post-production", wrapped: "Wrapped", inprod: "In Production" };
-const STATUS_OPTIONS = ["renew", "cancel", "pickup", "indev", "prepro", "postpro"];
+const STATUS_OPTIONS = ["renew", "cancel", "pickup", "indev", "prepro", "inprod", "postpro"];
+// Production lifecycle is a separate dimension from the market status (renewed/canceled/pickup).
+const PROD_STATUSES = ["indev", "prepro", "inprod", "postpro"];
+const PROD_LABEL = { indev: "In Development", prepro: "Pre-production", inprod: "In Production", postpro: "Post-production" };
+const MARKET_STATUSES = ["renew", "cancel", "pickup"];
 
 function render() {
   const term = filters.q.trim().toLowerCase();
@@ -1373,6 +1454,7 @@ function render() {
     if (filters.view === "archived" && !isArchived(it)) return false;
     if (filters.view === "all" && isArchived(it)) return false;
     if (!inSet(filters.status, it.status)) return false;
+    if (!inSet(filters.production, getProdStatus(it))) return false;
     if (!inSet(filters.type, it.type)) return false;
     if (!inSet(filters.genre, it.genre)) return false;
     if (!inSet(filters.source, it.source)) return false;
@@ -1410,6 +1492,10 @@ function render() {
     const statusLbl = it.statusLabel || STATUS_LABEL[it.status] || it.status;
     const musicVal = it._musicStyle || "";
     const owner = getOwner(it);
+    const contacted = isContacted(it);
+    const noteVal = getNote(it);
+    const prodStatus = getProdStatus(it);
+    const showMarket = MARKET_STATUSES.includes(it.status);
     const ownerHtml = owner
       ? `<div class="owner-row" data-owner-key="${esc(k)}">
            <span class="owner-label">Owner</span>
@@ -1421,12 +1507,14 @@ function render() {
            <button type="button" class="owner-claim-btn" data-action="claim-owner" data-key="${esc(k)}">Claim ownership</button>
          </div>`;
     return `
-    <div class="row proto s-${esc(it.status)}${fav ? ' is-fav' : ''}${archived ? ' is-archived' : ''}${edited ? ' is-edited' : ''}" data-key="${esc(k)}">
+    <div class="row proto s-${esc(prodStatus || it.status)}${fav ? ' is-fav' : ''}${archived ? ' is-archived' : ''}${edited ? ' is-edited' : ''}" data-key="${esc(k)}">
       <div class="badge-stack">
-        <span class="badge b-${it.status}">${esc(statusLbl)}</span>
+        ${prodStatus ? `<span class="badge prod-badge b-${prodStatus}">${esc(PROD_LABEL[prodStatus])}</span>` : ''}
+        ${showMarket ? `<span class="badge market-badge b-${it.status}">${esc(STATUS_LABEL[it.status])}</span>` : ''}
+        ${it.statusLabel && it.statusLabel !== (STATUS_LABEL[it.status] || it.status) && it.statusLabel !== (PROD_LABEL[prodStatus] || '') ? `<span class="status-sub">${esc(it.statusLabel)}</span>` : ''}
         <span class="priority p-${it._tier}">${it._tier.toUpperCase()} <span class="score">· ${it._priority}</span></span>
       </div>
-      <div>
+      <div class="entry-main">
         <div class="title">${esc(it.title)}</div>
         <div class="meta">
           <span class="net">${esc(it.network)}</span>
@@ -1438,6 +1526,7 @@ function render() {
         </div>
         <div class="detail">${esc(it.detail)}</div>
         ${it.prod ? `<div class="prod-status"><span class="label">Production:</span> ${esc(it.prod)}</div>` : ""}
+        ${it.airDate ? `<div class="prod-status air-date"><span class="label">Air Date:</span> ${esc(it.airDate)}</div>` : ""}
         <div class="signals">
           <span class="sig pot-${it._royalty}${it._royaltySource==='db'?' from-db':''}"><span class="k">Royalty Potential</span> ${it._royalty}</span>
           <span class="sig prob-${it._rerunProb}${it._rerunSource==='db'?' from-db':''}"><span class="k">Rerun Probability</span> ${it._rerunProb}</span>
@@ -1447,6 +1536,9 @@ function render() {
         ${ownerHtml}
         <div class="src">${sources.map(s => `<a href="${esc(s[1])}" target="_blank" rel="noopener">${esc(s[0])} ↗</a>`).join("")}</div>
         <div class="row-actions">
+          <label class="contact-check ${contacted ? 'on' : ''}" title="Mark that you have initiated correspondence">
+            <input type="checkbox" data-action="contacted" data-key="${esc(k)}" ${contacted ? 'checked' : ''}> In Contact
+          </label>
           <span class="icon-btn fav ${fav ? 'on' : ''}" data-action="fav" data-key="${esc(k)}">${fav ? '★' : '☆'}</span>
           <span class="icon-btn archive ${archived ? 'on' : ''}" data-action="archive" data-key="${esc(k)}">${archived ? '↩' : '✕'}</span>
           <span class="icon-btn edit" data-action="edit" data-key="${esc(k)}">✎ Edit</span>
@@ -1456,8 +1548,10 @@ function render() {
           <label>Title</label><input data-field="title" value="${esc(it.title)}">
           <label>Network</label><input data-field="network" value="${esc(it.network)}">
           <label>Studio</label><input data-field="studio" value="${esc(it.studio)}">
-          <label>Status</label>
-          <select data-field="status">${STATUS_OPTIONS.map(s => `<option value="${s}"${s===it.status?' selected':''}>${STATUS_LABEL[s]}</option>`).join("")}</select>
+          <label>Production Status</label>
+          <select data-prodstatus="1"><option value="">— none —</option>${PROD_STATUSES.map(s => `<option value="${s}"${s===prodStatus?' selected':''}>${PROD_LABEL[s]}</option>`).join("")}</select>
+          <label>Status (market)</label>
+          <select data-field="status">${(MARKET_STATUSES.includes(it.status)?MARKET_STATUSES:[it.status,...MARKET_STATUSES]).map(s => `<option value="${s}"${s===it.status?' selected':''}>${STATUS_LABEL[s]||s}</option>`).join("")}</select>
           <label>Status Label</label><input data-field="statusLabel" value="${esc(it.statusLabel)}">
           <label>Type</label>
           <select data-field="type">${["broadcast","cable","streaming"].map(t => `<option value="${t}"${t===it.type?' selected':''}>${t}</option>`).join("")}</select>
@@ -1468,6 +1562,7 @@ function render() {
           <label>Date Added</label><input type="date" data-field="dateAdded" value="${esc(it.dateAdded||'')}">
           <label>Detail</label><textarea data-field="detail">${esc(it.detail)}</textarea>
           <label>Production</label><textarea data-field="prod">${esc(it.prod || '')}</textarea>
+          <label>Air Date</label><input data-field="airDate" value="${esc(it.airDate || '')}" placeholder="e.g. Fall 2026 or 2026-09-15">
           <div class="btn-row">
             <button class="btn btn-primary" data-action="saveEdit" data-key="${esc(k)}">Save</button>
             <button class="btn" data-action="cancelEdit" data-key="${esc(k)}">Cancel</button>
@@ -1475,8 +1570,21 @@ function render() {
           </div>
         </div>
       </div>
+      <div class="entry-notes">
+        <label class="notes-label">Notes</label>
+        <textarea class="notes-area" data-action="note-input" data-key="${esc(k)}" placeholder="Add notes or updates…">${esc(noteVal)}</textarea>
+      </div>
     </div>`;
   }).join("");
+  // Notes: persist on blur
+  list.querySelectorAll('textarea[data-action="note-input"]').forEach(ta => {
+    ta.addEventListener("blur", e => {
+      const key = e.target.dataset.key;
+      const baseItem = items.find(i => itemKey(i) === key); if (!baseItem) return;
+      saveNote(baseItem, e.target.value);
+    });
+    ta.addEventListener("click", e => e.stopPropagation());
+  });
   // Inline music inputs: persist on blur and on Enter
   list.querySelectorAll('input[data-action="music-input"]').forEach(inp => {
     inp.addEventListener("blur", e => {
@@ -1489,10 +1597,12 @@ function render() {
   });
   list.querySelectorAll("[data-action]").forEach(el => {
     if (el.matches('input[data-action="music-input"]')) return;
+    if (el.matches('textarea[data-action="note-input"]')) return;
     el.addEventListener("click", e => {
       const action = el.dataset.action; const key = el.dataset.key;
       const baseItem = items.find(i => itemKey(i) === key); if (!baseItem) return;
-      if (action === "fav") toggleFav(baseItem);
+      if (action === "contacted") { toggleContacted(baseItem); }
+      else if (action === "fav") toggleFav(baseItem);
       else if (action === "archive") toggleArchive(baseItem);
       else if (action === "revert") revertEdit(baseItem);
       else if (action === "claim-owner") {
@@ -1508,6 +1618,8 @@ function render() {
         const form = list.querySelector('[data-form="' + CSS.escape(key) + '"]'); if (!form) return;
         const fields = {}; form.querySelectorAll("[data-field]").forEach(inp => { fields[inp.dataset.field] = inp.value; });
         Object.assign(baseItem, fields);
+        const prodSel = form.querySelector('select[data-prodstatus]');
+        if (prodSel) setProdStatus(baseItem, prodSel.value);
         recomputeAllSignals();
         const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value); render();
         suppressRealtime(); slSaveItem(baseItem);
@@ -1612,6 +1724,7 @@ function exportCsv() {
     if (filters.view === "archived" && !isArchived(it)) return false;
     if (filters.view === "all" && isArchived(it)) return false;
     if (!inSet(filters.status, it.status)) return false;
+    if (!inSet(filters.production, getProdStatus(it))) return false;
     if (!inSet(filters.type, it.type)) return false;
     if (!inSet(filters.genre, it.genre)) return false;
     if (!inSet(filters.source, it.source)) return false;
@@ -1648,9 +1761,12 @@ async function _doManualSync(btn) {
           const ed = s.edits || {};
           const music = (ed.__music && typeof ed.__music === 'object') ? ed.__music : {};
           const owners = (ed.__owners && typeof ed.__owners === 'object') ? ed.__owners : {};
+          const contacted = (ed.__contacted && typeof ed.__contacted === 'object') ? ed.__contacted : {};
+          const itemNotes = (ed.__notes && typeof ed.__notes === 'object') ? ed.__notes : {};
+          const prodStatus = (ed.__prodstatus && typeof ed.__prodstatus === 'object') ? ed.__prodstatus : {};
           const cleanEdits = Object.assign({}, ed);
-          delete cleanEdits.__music; delete cleanEdits.__owners;
-          state = { favs: s.favs || {}, archived: s.archived || {}, edits: cleanEdits, added: s.added || [], music, owners };
+          delete cleanEdits.__music; delete cleanEdits.__owners; delete cleanEdits.__contacted; delete cleanEdits.__notes; delete cleanEdits.__prodstatus;
+          state = { favs: s.favs || {}, archived: s.archived || {}, edits: cleanEdits, added: s.added || [], music, owners, contacted, itemNotes, prodStatus };
         }
         try {
           localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(channels));
@@ -1744,23 +1860,30 @@ const CH_DEFAULTS = [
   { name: "PBS Masterpiece",     type: "broadcast", royaltyPotential: "Low",    proPayout: 32, rerunProbability: "Low",    notes: "" },
   { name: "Sky One (UK)",        type: "cable",     royaltyPotential: "Low",    proPayout: 35, rerunProbability: "Medium", notes: "" }
 ];
-const CH_TYPES = ["broadcast", "cable", "streaming"];
+const CH_TYPES = [
+  { value: "broadcast",         label: "Broadcast" },
+  { value: "cable",             label: "Cable" },
+  { value: "streaming-premium", label: "Streaming - Premium" },
+  { value: "streaming-fast",    label: "Streaming - FAST" }
+];
 const CH_LEVELS = ["High", "Medium", "Low"];
+// Normalize legacy single "streaming" value to the new Premium option.
+function chNormType(t) { return t === "streaming" ? "streaming-premium" : (t || "broadcast"); }
+function chTypeLabel(t) { const m = CH_TYPES.find(x => x.value === chNormType(t)); return m ? m.label : (t || ""); }
 
 let chSearch = "";
+let chSort = "alpha"; // alpha | recent | group
 let chExpanded = new Set();
 
-function renderChannels() {
-  const term = chSearch.toLowerCase();
-  const visible = channels.filter(c => !term || (c.name||"").toLowerCase().includes(term) || (c.notes||"").toLowerCase().includes(term));
-  const tbody = document.getElementById("ch-rows");
-  tbody.innerHTML = visible.map(c => {
-    const realIdx = channels.indexOf(c);
-    const open = chExpanded.has(realIdx);
-    return `
+function chRowHtml(c) {
+  const realIdx = channels.indexOf(c);
+  const open = chExpanded.has(realIdx);
+  const typeVal = chNormType(c.type);
+  return `
     <tr data-idx="${realIdx}">
       <td><input type="text" data-field="name" value="${esc(c.name)}" style="font-weight:600;"></td>
-      <td><select data-field="type">${CH_TYPES.map(t => `<option value="${t}"${t===c.type?' selected':''}>${t}</option>`).join("")}</select></td>
+      <td><select data-field="type">${CH_TYPES.map(t => `<option value="${t.value}"${t.value===typeVal?' selected':''}>${esc(t.label)}</option>`).join("")}</select></td>
+      <td><input type="text" data-field="parentCompany" value="${esc(c.parentCompany||'')}" placeholder="e.g. Warner Bros. Discovery"></td>
       <td><select data-field="royaltyPotential" class="pot-${esc(c.royaltyPotential)}">${CH_LEVELS.map(l => `<option value="${l}"${l===c.royaltyPotential?' selected':''}>${l}</option>`).join("")}</select></td>
       <td><input type="number" min="0" max="100" data-field="proPayout" value="${c.proPayout||0}"></td>
       <td><select data-field="rerunProbability" class="prob-${esc(c.rerunProbability)}">${CH_LEVELS.map(l => `<option value="${l}"${l===c.rerunProbability?' selected':''}>${l}</option>`).join("")}</select></td>
@@ -1768,7 +1891,7 @@ function renderChannels() {
       <td style="text-align:center;"><span class="icon-btn" data-action="ch-delete" data-idx="${realIdx}" title="Delete row">✕</span></td>
     </tr>
     <tr class="expand-row" data-idx="${realIdx}" style="display:${open?'table-row':'none'};">
-      <td colspan="7">
+      <td colspan="8">
         <div class="expand-form">
           <div class="field">
             <label>Detailed notes for ${esc(c.name)}</label>
@@ -1777,7 +1900,31 @@ function renderChannels() {
         </div>
       </td>
     </tr>`;
-  }).join("");
+}
+
+function renderChannels() {
+  const term = chSearch.toLowerCase();
+  let visible = channels.filter(c => !term || (c.name||"").toLowerCase().includes(term) || (c.notes||"").toLowerCase().includes(term) || (c.parentCompany||"").toLowerCase().includes(term));
+  const tbody = document.getElementById("ch-rows");
+  if (chSort === "alpha") {
+    visible = visible.slice().sort((a,b) => (a.name||"").localeCompare(b.name||""));
+  } else if (chSort === "recent") {
+    visible = visible.slice().sort((a,b) => (b.updatedAt||"").localeCompare(a.updatedAt||""));
+  }
+  if (chSort === "group") {
+    const groups = {};
+    visible.forEach(c => { const k = (c.parentCompany||"").trim() || "— Unassigned —"; (groups[k] = groups[k] || []).push(c); });
+    const keys = Object.keys(groups).sort((a,b) => {
+      if (a === "— Unassigned —") return 1; if (b === "— Unassigned —") return -1;
+      return a.localeCompare(b);
+    });
+    tbody.innerHTML = keys.map(k => {
+      const rows = groups[k].slice().sort((a,b) => (a.name||"").localeCompare(b.name||""));
+      return `<tr class="group-header"><td colspan="8" style="background:var(--panel,#f4f4f5); font-weight:700; padding:8px 10px;">${esc(k)} <span style="font-weight:400; color:var(--muted);">· ${rows.length}</span></td></tr>` + rows.map(chRowHtml).join("");
+    }).join("");
+  } else {
+    tbody.innerHTML = visible.map(chRowHtml).join("");
+  }
   tbody.querySelectorAll('[data-action="ch-expand"]').forEach(el => {
     el.addEventListener("click", () => {
       const idx = parseInt(el.dataset.idx);
@@ -1847,21 +1994,16 @@ function chUpdateStats() {
   const s = document.getElementById("ch-stats"); if (s) s.textContent = summary;
 }
 document.getElementById("ch-addRow").addEventListener("click", () => {
-  const newRow = { name: "New channel", type: "cable", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "" };
+  const newRow = { name: "New channel", type: "broadcast", parentCompany: "", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "", updatedAt: new Date().toISOString() };
   channels.unshift(newRow);
   suppressRealtime(); chSaveRow(newRow); renderChannels();
 });
-document.getElementById("ch-resetData").addEventListener("click", () => {
-  if (confirm("Reset all channels to the seed defaults?")) {
-    channels = CH_DEFAULTS.slice(); suppressRealtime(); chSave(channels); renderChannels();
-    recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
-  }
-});
+document.getElementById("ch-sort").addEventListener("change", e => { chSort = e.target.value; renderChannels(); });
 document.getElementById("ch-q").addEventListener("input", e => { chSearch = e.target.value; renderChannels(); });
 document.getElementById("ch-exportCsv").addEventListener("click", () => {
-  const headers = ["Channel","Type","Royalty Potential","Payout","Rerun Probability","Detailed Notes"];
+  const headers = ["Channel","Type","Parent Company","Royalty Potential","Payout","Rerun Probability","Detailed Notes"];
   const lines = [headers.map(csvCell).join(",")];
-  channels.forEach(c => lines.push([c.name, c.type, c.royaltyPotential, c.proPayout, c.rerunProbability, c.notes].map(csvCell).join(",")));
+  channels.forEach(c => lines.push([c.name, chTypeLabel(c.type), c.parentCompany||"", c.royaltyPotential, c.proPayout, c.rerunProbability, c.notes].map(csvCell).join(",")));
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
