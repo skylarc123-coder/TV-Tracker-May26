@@ -1328,9 +1328,114 @@ async function initApp() {
   }
 }
 
+// === Website auth gate: email magic-link, restricted to @audionetwork.com ==========
+// Active ONLY on the public website (IS_COWORK === false). Inside the Cowork artifact,
+// access is already controlled by Claude, so we never show a login screen there.
+const AUTH_LS_KEY = 'tv-tracker-auth-v1';
+function _authLoad() { try { return JSON.parse(localStorage.getItem(AUTH_LS_KEY) || 'null'); } catch (e) { return null; } }
+function _authStore(s) { try { localStorage.setItem(AUTH_LS_KEY, JSON.stringify(s)); } catch (e) {} }
+function _authClear() { try { localStorage.removeItem(AUTH_LS_KEY); } catch (e) {} }
+function _applyToken(t) { SB_H['Authorization'] = 'Bearer ' + t; }
+function _parseHashSession() {
+  const h = (location.hash || '').replace(/^#/, '');
+  if (!h) return null;
+  const p = new URLSearchParams(h);
+  const at = p.get('access_token'), rt = p.get('refresh_token');
+  if (!at || !rt) return null;
+  const expIn = parseInt(p.get('expires_in') || '3600', 10);
+  const expAt = parseInt(p.get('expires_at') || String(Math.floor(Date.now()/1000) + expIn), 10);
+  history.replaceState(null, '', location.pathname + location.search);
+  return { access_token: at, refresh_token: rt, expires_at: expAt };
+}
+async function _refreshSession(rt) {
+  try {
+    const r = await fetch(SB_URL + '/auth/v1/token?grant_type=refresh_token', {
+      method: 'POST', headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: rt })
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d.access_token) return null;
+    return { access_token: d.access_token, refresh_token: d.refresh_token || rt,
+             expires_at: d.expires_at || (Math.floor(Date.now()/1000) + (d.expires_in || 3600)) };
+  } catch (e) { return null; }
+}
+function _scheduleRefresh() {
+  if (window._authRefreshTimer) return;
+  window._authRefreshTimer = setInterval(async () => {
+    const s = _authLoad();
+    if (s && s.refresh_token) { const f = await _refreshSession(s.refresh_token); if (f) { _authStore(f); _applyToken(f.access_token); } }
+  }, 45 * 60 * 1000);
+}
+async function ensureAuth() {
+  let sess = _parseHashSession();
+  if (sess) { _authStore(sess); _applyToken(sess.access_token); _addSignOut(); _scheduleRefresh(); return true; }
+  sess = _authLoad();
+  if (sess && sess.access_token) {
+    const now = Math.floor(Date.now()/1000);
+    if (sess.expires_at && sess.expires_at - 60 <= now) {
+      const fresh = await _refreshSession(sess.refresh_token);
+      if (fresh) { _authStore(fresh); _applyToken(fresh.access_token); _addSignOut(); _scheduleRefresh(); return true; }
+      _authClear();
+    } else {
+      _applyToken(sess.access_token); _addSignOut(); _scheduleRefresh(); return true;
+    }
+  }
+  _showLogin();
+  return false;
+}
+function signOut() { _authClear(); location.reload(); }
+function _addSignOut() {
+  if (document.getElementById('auth-signout')) return;
+  const a = document.createElement('button');
+  a.id = 'auth-signout'; a.textContent = 'Sign out';
+  a.style.cssText = 'position:fixed;top:8px;right:10px;z-index:9998;font-size:11px;padding:4px 9px;border:1px solid var(--border,#d4d4d8);border-radius:6px;background:var(--panel,#fff);color:var(--muted,#666);cursor:pointer;opacity:.75;';
+  a.addEventListener('click', signOut);
+  document.body.appendChild(a);
+}
+function _showLogin(msg) {
+  let el = document.getElementById('auth-overlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'auth-overlay';
+    el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#0b0b0e;color:#e7e7ea;font-family:inherit;';
+    el.innerHTML = '<div style="width:340px;max-width:88vw;background:#17171c;border:1px solid #2a2a31;border-radius:14px;padding:26px 24px;box-shadow:0 10px 40px rgba(0,0,0,.4);">'
+      + '<div style="font-size:17px;font-weight:700;margin-bottom:4px;">TV Production Slate</div>'
+      + '<div style="font-size:12.5px;color:#9a9aa3;margin-bottom:18px;">Sign in with your Audio Network email to continue.</div>'
+      + '<input id="auth-email" type="email" placeholder="you@audionetwork.com" autocomplete="email" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #34343c;background:#0f0f13;color:#fff;margin-bottom:10px;">'
+      + '<button id="auth-send" style="width:100%;padding:10px 12px;font-size:14px;font-weight:600;border:none;border-radius:8px;background:#4f7cff;color:#fff;cursor:pointer;">Send me a login link</button>'
+      + '<div id="auth-msg" style="font-size:12px;margin-top:12px;min-height:16px;color:#9a9aa3;"></div></div>';
+    document.body.appendChild(el);
+    const send = el.querySelector('#auth-send');
+    const email = el.querySelector('#auth-email');
+    const setMsg = (t, color) => { const m = el.querySelector('#auth-msg'); m.textContent = t; m.style.color = color || '#9a9aa3'; };
+    const submit = async () => {
+      const val = (email.value || '').trim().toLowerCase();
+      if (!/^[^@\s]+@audionetwork\.com$/.test(val)) { setMsg('Please use your @audionetwork.com email address.', '#ff8f8f'); return; }
+      send.disabled = true; setMsg('Sending…');
+      try {
+        const r = await fetch(SB_URL + '/auth/v1/otp', {
+          method: 'POST', headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: val, create_user: true })
+        });
+        if (r.ok) { setMsg('Check your email for a login link. You can close this tab once you click it.', '#86e0a3'); }
+        else { const e = await r.text(); setMsg('Could not send link: ' + e.slice(0,140), '#ff8f8f'); send.disabled = false; }
+      } catch (e) { setMsg('Network error sending link. Please try again.', '#ff8f8f'); send.disabled = false; }
+    };
+    send.addEventListener('click', submit);
+    email.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+  }
+  el.style.display = 'flex';
+  if (msg) el.querySelector('#auth-msg').textContent = msg;
+}
+
 (async () => {
   const lo = document.getElementById('loading-overlay');
   if (lo) { lo.style.display = 'flex'; }
+  if (!IS_COWORK) {
+    const authed = await ensureAuth();
+    if (!authed) { if (lo) lo.style.display = 'none'; return; }
+  }
   await initApp();
   if (lo) { lo.style.display = 'none'; }
 })();
