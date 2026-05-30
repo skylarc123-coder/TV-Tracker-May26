@@ -361,8 +361,8 @@
 
   <section id="tab-slate" class="tab-section active">
     <header>
-      <h1>TV Production Slate — Priority Prototype</h1>
-      <div class="sub">Slate of in-flight TV productions, scored for outreach priority. Backend signals are currently mocked using rule-based heuristics until the real data sources are wired in.</div>
+      <h1>TV Production Slate</h1>
+      <div class="sub">Slate of in-flight TV productions, scored for outreach priority.</div>
     </header>
     <div class="toolbar">
       <input type="search" id="q" placeholder="Search show, network, studio…">
@@ -403,7 +403,7 @@
         </div>
       </div>
       <div class="ms-filter" data-filter="production">
-        <button class="ms-btn" type="button">Production: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <button class="ms-btn" type="button">Production Stage: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
         <div class="ms-menu">
           <label><input type="checkbox" value="indev"> In Development</label>
           <label><input type="checkbox" value="prepro"> Pre-production</label>
@@ -413,7 +413,7 @@
         </div>
       </div>
       <div class="ms-filter" data-filter="status">
-        <button class="ms-btn" type="button">Status: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <button class="ms-btn" type="button">Update Type: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
         <div class="ms-menu">
           <label><input type="checkbox" value="renew"> Renewed</label>
           <label><input type="checkbox" value="cancel"> Canceled</label>
@@ -422,7 +422,7 @@
         </div>
       </div>
       <div class="ms-filter" data-filter="type">
-        <button class="ms-btn" type="button">Type: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <button class="ms-btn" type="button">Delivery Method: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
         <div class="ms-menu">
           <label><input type="checkbox" value="broadcast"> Broadcast</label>
           <label><input type="checkbox" value="cable"> Cable</label>
@@ -446,6 +446,25 @@
           <button type="button" class="ms-clear">Clear all</button>
         </div>
       </div>
+      <div class="ms-filter" data-filter="channel">
+        <button class="ms-btn" type="button">Channel: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <div class="ms-filter" data-filter="parentCompany">
+        <button class="ms-btn" type="button">Parent Company: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <div class="ms-filter" data-filter="owner">
+        <button class="ms-btn" type="button">Owner: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
+      <datalist id="ownerNamesList"></datalist>
       <label class="filter-group">Date Added <select data-filter="dateRange"><option value="all">All Dates</option><option value="older">Older</option><option value="byDate">By Run</option><option value="range">Custom Range</option></select></label>
       <select id="dateSelect" style="display:none;"></select>
       <span id="rangePicker" style="display:none; align-items:center; gap:6px; font-size:12px; color:var(--muted);">
@@ -1433,7 +1452,7 @@ const dateFromInput = document.getElementById("dateFrom");
 const dateToInput = document.getElementById("dateTo");
 // Multi-select filters use arrays (empty = no filter / all)
 const filters = {
-  status: [], production: [], type: [], genre: [], source: [], priority: [], license: [], royalty: [], rerunProb: [],
+  status: [], production: [], type: [], genre: [], source: [], priority: [], license: [], royalty: [], rerunProb: [], channel: [], parentCompany: [], owner: [],
   dateRange: "all", selectedDate: null, dateFrom: null, dateTo: null, view: "all", q: ""
 };
 
@@ -1469,6 +1488,19 @@ function render() {
     if (!inSet(filters.license, it._covered)) return false;
     if (!inSet(filters.royalty, it._royalty)) return false;
     if (!inSet(filters.rerunProb, it._rerunProb)) return false;
+    if (filters.channel && filters.channel.length) {
+      const ch = lookupChannel(it.network);
+      if (!ch || !filters.channel.includes(ch.name)) return false;
+    }
+    if (filters.parentCompany && filters.parentCompany.length) {
+      const ch = lookupChannel(it.network);
+      const pc = ch && ch.parentCompany ? ch.parentCompany.trim() : "";
+      if (!filters.parentCompany.includes(pc)) return false;
+    }
+    if (filters.owner && filters.owner.length) {
+      const o = (getOwner(it) || "").trim() || "__none__";
+      if (!filters.owner.includes(o)) return false;
+    }
     if (term) {
       const blob = (it.title + " " + it.network + " " + it.studio + " " + it.detail + " " + (it._musicStyle||"")).toLowerCase();
       if (!blob.includes(term)) return false;
@@ -1505,6 +1537,11 @@ function render() {
       : `<div class="owner-row" data-owner-key="${esc(k)}">
            <span class="owner-label">Unclaimed</span>
            <button type="button" class="owner-claim-btn" data-action="claim-owner" data-key="${esc(k)}">Claim ownership</button>
+           <span class="owner-claim-form" style="display:none; align-items:center; gap:6px;">
+             <input type="text" class="owner-claim-input" data-key="${esc(k)}" list="ownerNamesList" placeholder="Your name" style="padding:3px 8px; font-size:11px; border:1px solid var(--border,#d4d4d8); border-radius:6px;">
+             <button type="button" class="owner-claim-btn" data-action="claim-save" data-key="${esc(k)}">Save</button>
+             <button type="button" class="owner-release-btn" data-action="claim-cancel" data-key="${esc(k)}">Cancel</button>
+           </span>
          </div>`;
     return `
     <div class="row proto s-${esc(prodStatus || it.status)}${fav ? ' is-fav' : ''}${archived ? ' is-archived' : ''}${edited ? ' is-edited' : ''}" data-key="${esc(k)}">
@@ -1595,6 +1632,18 @@ function render() {
     inp.addEventListener("keydown", e => { if (e.key === "Enter") e.target.blur(); });
     inp.addEventListener("click", e => e.stopPropagation());
   });
+  // Inline owner-claim inputs: save on Enter (prompt() is blocked in the sandboxed artifact)
+  list.querySelectorAll('input.owner-claim-input').forEach(inp => {
+    inp.addEventListener("click", e => e.stopPropagation());
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const key = e.target.dataset.key;
+        const baseItem = items.find(i => itemKey(i) === key); if (!baseItem) return;
+        if (e.target.value && e.target.value.trim()) saveOwner(baseItem, e.target.value);
+      }
+    });
+  });
   list.querySelectorAll("[data-action]").forEach(el => {
     if (el.matches('input[data-action="music-input"]')) return;
     if (el.matches('textarea[data-action="note-input"]')) return;
@@ -1606,9 +1655,20 @@ function render() {
       else if (action === "archive") toggleArchive(baseItem);
       else if (action === "revert") revertEdit(baseItem);
       else if (action === "claim-owner") {
-        const name = prompt("Claim ownership of \"" + baseItem.title + "\".\nEnter your name:");
-        if (name && name.trim()) saveOwner(baseItem, name);
+        const row = el.closest(".owner-row");
+        if (row) {
+          el.style.display = "none";
+          const form = row.querySelector(".owner-claim-form");
+          if (form) { form.style.display = "inline-flex"; const inp = form.querySelector(".owner-claim-input"); if (inp) inp.focus(); }
+        }
       }
+      else if (action === "claim-save") {
+        const row = el.closest(".owner-row");
+        const inp = row && row.querySelector(".owner-claim-input");
+        const val = inp ? inp.value : "";
+        if (val && val.trim()) saveOwner(baseItem, val);
+      }
+      else if (action === "claim-cancel") { render(); }
       else if (action === "release-owner") {
         if (confirm("Release ownership of \"" + baseItem.title + "\"?")) saveOwner(baseItem, "");
       }
@@ -1635,7 +1695,33 @@ function render() {
 }
 
 // === Multi-select filter widget setup =============================================
+// Known team members — always shown in the Owner filter. New hires are picked up
+// automatically once they've claimed any entry; add them here to show them before that.
+const TEAM_OWNERS = ["Ellie", "Tyra"];
+function populateSlateLookupFilters() {
+  const chMenu = document.querySelector('.ms-filter[data-filter="channel"] .ms-menu');
+  const pcMenu = document.querySelector('.ms-filter[data-filter="parentCompany"] .ms-menu');
+  const ownMenu = document.querySelector('.ms-filter[data-filter="owner"] .ms-menu');
+  if (ownMenu) {
+    const assigned = (items || []).map(getOwner).map(o => (o || "").trim()).filter(Boolean);
+    const names = Array.from(new Set([...TEAM_OWNERS, ...assigned])).sort((a, b) => a.localeCompare(b));
+    ownMenu.innerHTML = names.map(n => `<label><input type="checkbox" value="${esc(n)}"> ${esc(n)}</label>`).join("")
+      + `<label><input type="checkbox" value="__none__"> — Unassigned —</label>`
+      + '<button type="button" class="ms-clear">Clear all</button>';
+    const dl = document.getElementById("ownerNamesList");
+    if (dl) dl.innerHTML = names.map(n => `<option value="${esc(n)}"></option>`).join("");
+  }
+  if (chMenu) {
+    const names = Array.from(new Set((channels || []).map(c => c.name).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    chMenu.innerHTML = names.map(n => `<label><input type="checkbox" value="${esc(n)}"> ${esc(n)}</label>`).join("") + '<button type="button" class="ms-clear">Clear all</button>';
+  }
+  if (pcMenu) {
+    const pcs = Array.from(new Set((channels || []).map(c => (c.parentCompany || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    pcMenu.innerHTML = pcs.map(n => `<label><input type="checkbox" value="${esc(n)}"> ${esc(n)}</label>`).join("") + '<button type="button" class="ms-clear">Clear all</button>';
+  }
+}
 function setupMultiSelects() {
+  populateSlateLookupFilters();
   document.querySelectorAll(".ms-filter").forEach(ms => {
     const filterKey = ms.dataset.filter;
     const btn = ms.querySelector(".ms-btn");
@@ -2200,7 +2286,6 @@ document.getElementById("ag-exportCsv").addEventListener("click", () => {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
-
 </script>
 </body>
 </html>
