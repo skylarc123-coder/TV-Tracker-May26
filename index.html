@@ -1045,6 +1045,9 @@ function showSyncBadge(mode) {
 
 async function pollRemoteChannels() {
   try {
+    // Don't refresh/clobber the Channels table while the user is editing a cell in it.
+    const _ae = document.activeElement;
+    if (_ae && _ae.closest && _ae.closest('#ch-rows')) return false;
     const d = await sbGet('/rest/v1/channels?select=updated_at&order=updated_at.desc&limit=1');
     const newest = d && d.length ? d[0].updated_at : null;
     if (!newest) return false;
@@ -1136,6 +1139,9 @@ async function pollRemoteItems() {
 }
 async function pollAllRemote() {
   if (_realtimeSuppressed) return;
+  // Don't pull/clobber while the user is actively typing or editing a field in any tab.
+  const _ae = document.activeElement;
+  if (_ae && /^(INPUT|SELECT|TEXTAREA)$/.test(_ae.tagName || '')) return;
   const r1 = await pollRemoteChannels();
   const r2 = await pollRemoteAgreements();
   const r3 = await pollRemoteState();
@@ -1781,13 +1787,16 @@ function render() {
       else if (action === "cancelEdit") { const form = list.querySelector('[data-form="' + CSS.escape(key) + '"]'); if (form) form.classList.remove("open"); }
       else if (action === "saveEdit") {
         const form = list.querySelector('[data-form="' + CSS.escape(key) + '"]'); if (!form) return;
+        const _oldTitle = baseItem.title, _oldSource = baseItem.source;
         const fields = {}; form.querySelectorAll("[data-field]").forEach(inp => { fields[inp.dataset.field] = inp.value; });
         Object.assign(baseItem, fields);
         const prodSel = form.querySelector('select[data-prodstatus]');
         if (prodSel) setProdStatus(baseItem, prodSel.value);
         recomputeAllSignals();
         const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value); render();
-        suppressRealtime(); slSaveItem(baseItem);
+        suppressRealtime(8000); slSaveItem(baseItem);
+        // Title + source form the DB key; if either changed, remove the orphaned old row so it can't duplicate.
+        if (baseItem.title !== _oldTitle || baseItem.source !== _oldSource) { slDeleteItem({ title: _oldTitle, source: _oldSource }); }
         const k = itemKey(baseItem); if (state.edits[k]) { delete state.edits[k]; suppressRealtime(); saveState(state); }
       }
       else if (action === "deleteAdded") {
@@ -2129,10 +2138,14 @@ function renderChannels() {
       const field = e.target.dataset.field; if (!field) return;
       let val = e.target.value;
       if (field === "proPayout") val = Math.max(0, Math.min(100, parseInt(val) || 0));
+      let _renamedFrom = null;
+      if (field === "name") { const oldName = channels[idx].name; if (oldName && oldName !== val) _renamedFrom = oldName; }
       channels[idx][field] = val;
       if (field === "royaltyPotential") e.target.className = "pot-" + val;
       if (field === "rerunProbability") e.target.className = "prob-" + val;
-      suppressRealtime(); chSaveRow(channels[idx]); chUpdateStats();
+      suppressRealtime(8000);
+      if (_renamedFrom) chDeleteRow(_renamedFrom);
+      chSaveRow(channels[idx]); chUpdateStats();
       recomputeAllSignals();
       const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
       if (typeof render === "function") render();
@@ -2185,9 +2198,17 @@ function chUpdateStats() {
   const s = document.getElementById("ch-stats"); if (s) s.textContent = summary;
 }
 document.getElementById("ch-addRow").addEventListener("click", () => {
-  const newRow = { name: "New channel", type: "broadcast", parentCompany: "", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "", updatedAt: new Date().toISOString() };
+  let base = "New channel", nm = base, n = 2;
+  while (channels.some(c => c.name === nm)) { nm = base + " " + n; n++; }
+  const newRow = { name: nm, type: "broadcast", parentCompany: "", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "", updatedAt: new Date().toISOString() };
   channels.unshift(newRow);
-  suppressRealtime(); chSaveRow(newRow); renderChannels();
+  suppressRealtime(8000); chSaveRow(newRow);
+  // Surface the new row where the user can see it: newest-first, then focus its name field.
+  chSort = "recent";
+  const sortSel = document.getElementById("ch-sort"); if (sortSel) sortSel.value = "recent";
+  renderChannels();
+  const inputs = document.querySelectorAll('#ch-rows input[data-field="name"]');
+  for (const inp of inputs) { if (inp.value === nm) { inp.focus(); inp.select(); inp.scrollIntoView({ block: "center" }); break; } }
 });
 document.getElementById("ch-sort").addEventListener("change", e => { chSort = e.target.value; renderChannels(); });
 document.getElementById("ch-q").addEventListener("input", e => { chSearch = e.target.value; renderChannels(); });
@@ -2303,11 +2324,15 @@ function renderAgreements() {
     el.addEventListener("change", e => {
       const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
       const field = e.target.dataset.field; if (!field) return;
+      let _renamedFrom = null;
+      if (field === "entity") { const oldE = agreements[idx].entity; if (oldE && oldE !== e.target.value) _renamedFrom = oldE; }
       agreements[idx][field] = e.target.value;
       if (field === "scope") e.target.className = "scope-" + e.target.value;
       if (field === "status") e.target.className = "status-" + e.target.value;
       if (field === "thirdPartySync") e.target.className = tpsClass(e.target.value);
-      suppressRealtime(); agSaveRow(agreements[idx]); agUpdateStats();
+      suppressRealtime(8000);
+      if (_renamedFrom) agDeleteRow(_renamedFrom);
+      agSaveRow(agreements[idx]); agUpdateStats();
       recomputeAllSignals();
       const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
       if (typeof render === "function") render();
@@ -2369,9 +2394,13 @@ function agUpdateStats() {
   const s = document.getElementById("ag-stats"); if (s) s.textContent = summary;
 }
 document.getElementById("ag-addRow").addEventListener("click", () => {
-  const newRow = { entity: "New entity", entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "", status: "active", salesforceUrl: "", territories: "", contentTypes: [], notes: "" };
+  let base = "New entity", en = base, k = 2;
+  while (agreements.some(a => a.entity === en)) { en = base + " " + k; k++; }
+  const newRow = { entity: en, entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "", status: "active", salesforceUrl: "", territories: "", contentTypes: [], notes: "" };
   agreements.unshift(newRow);
-  suppressRealtime(); agSaveRow(newRow); renderAgreements();
+  suppressRealtime(8000); agSaveRow(newRow); renderAgreements();
+  const inputs = document.querySelectorAll('#ag-rows input[data-field="entity"]');
+  for (const inp of inputs) { if (inp.value === en) { inp.focus(); inp.select(); inp.scrollIntoView({ block: "center" }); break; } }
 });
 document.getElementById("ag-resetData").addEventListener("click", () => {
   if (confirm("Reset all agreements to the seed defaults?")) {
