@@ -1157,10 +1157,20 @@ function startPolling() {
 function stopPolling() {
   if (_pollHandle) { clearInterval(_pollHandle); _pollHandle = null; }
 }
+function _flushActiveEdit() {
+  if (IS_COWORK) return;
+  const ae = document.activeElement;
+  // Blurring fires the field's existing save handler, flushing the edit to Supabase
+  // immediately so a cross-surface Sync can't read (and then revert to) a stale value.
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || '') && typeof ae.blur === 'function') ae.blur();
+}
 document.addEventListener('visibilitychange', () => {
   if (IS_COWORK) return;
-  if (document.hidden) stopPolling(); else { startPolling(); pollAllRemote(); }
+  if (document.hidden) { _flushActiveEdit(); stopPolling(); } else { startPolling(); pollAllRemote(); }
 });
+// When the window loses focus (e.g. switching to the Cowork artifact), flush in-progress edits.
+window.addEventListener('blur', _flushActiveEdit);
+window.addEventListener('pagehide', _flushActiveEdit);
 
 // === Slate items (seed) ============================================================
 let items = [];
