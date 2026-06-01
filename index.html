@@ -1805,9 +1805,22 @@ function render() {
         recomputeAllSignals();
         const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value); render();
         suppressRealtime(8000); slSaveItem(baseItem);
-        // Title + source form the DB key; if either changed, remove the orphaned old row so it can't duplicate.
-        if (baseItem.title !== _oldTitle || baseItem.source !== _oldSource) { slDeleteItem({ title: _oldTitle, source: _oldSource }); }
-        const k = itemKey(baseItem); if (state.edits[k]) { delete state.edits[k]; suppressRealtime(); saveState(state); }
+        // Title + source form the DB key. If either changed, delete the orphaned old row AND
+        // carry team data (notes, owner, favorite, archive, music, contacted, prod status) from
+        // the old key to the new one so nothing detaches on rename.
+        if (baseItem.title !== _oldTitle || baseItem.source !== _oldSource) {
+          slDeleteItem({ title: _oldTitle, source: _oldSource });
+          const _oldKey = baseItem._origKey || ((_oldTitle || "").toLowerCase().trim() + "|" + (_oldSource || ""));
+          const _newKey = itemKey(baseItem);
+          if (_oldKey !== _newKey) {
+            ["favs","archived","music","owners","contacted","itemNotes","prodStatus"].forEach(mapName => {
+              const m = state[mapName];
+              if (m && Object.prototype.hasOwnProperty.call(m, _oldKey)) { m[_newKey] = m[_oldKey]; delete m[_oldKey]; }
+            });
+            baseItem._origKey = _newKey;
+          }
+        }
+        const k = itemKey(baseItem); if (state.edits[k]) { delete state.edits[k]; } suppressRealtime(); saveState(state);
       }
       else if (action === "deleteAdded") {
         if (!confirm(`Delete "${baseItem.title}"?`)) return;
