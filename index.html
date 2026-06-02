@@ -88,6 +88,11 @@
   .icon-btn:hover { background: #f5f3ed; color: var(--text); }
   .icon-btn.fav.on { background: #fff3b0; color: #c08a00; border-color: #e6c97a; }
   .icon-btn.archive.on { background: var(--cancel-bg); color: var(--cancel); border-color: #f0c5be; }
+  /* Archive is destructive-ish (hides the entry), so it's separated to the far right with a
+     muted-red outline to keep it away from Edit/Favorite and reduce accidental clicks. */
+  .icon-btn.archive { margin-left: auto; width: auto; padding: 0 11px; font-size: 12px; font-weight: 600;
+    gap: 4px; color: var(--cancel); border-color: #e6b8b0; }
+  .icon-btn.archive:hover { background: var(--cancel-bg); color: var(--cancel); border-color: var(--cancel); }
   .icon-btn.edit { font-size: 12px; }
   .row.is-archived { opacity: 0.45; }
   .row.is-fav { background: linear-gradient(180deg, #fffaf0, #ffffff); border-color: #e6c97a; }
@@ -1733,9 +1738,9 @@ function render() {
             <input type="checkbox" data-action="contacted" data-key="${esc(k)}" ${contacted ? 'checked' : ''}> In Contact
           </label>
           <span class="icon-btn fav ${fav ? 'on' : ''}" data-action="fav" data-key="${esc(k)}">${fav ? '★' : '☆'}</span>
-          <span class="icon-btn archive ${archived ? 'on' : ''}" data-action="archive" data-key="${esc(k)}">${archived ? '↩' : '✕'}</span>
           <span class="icon-btn edit" data-action="edit" data-key="${esc(k)}">✎ Edit</span>
           ${edited ? `<span class="icon-btn edit" data-action="revert" data-key="${esc(k)}">↻ Revert</span>` : ''}
+          <span class="icon-btn archive ${archived ? 'on' : ''}" data-action="archive" data-key="${esc(k)}" title="${archived ? 'Restore this entry to the active slate' : 'Archive this entry (reversible — view under the Archived filter)'}">${archived ? '↩ Unarchive' : '✕ Archive'}</span>
         </div>
         <div class="edit-form" data-form="${esc(k)}">
           <label>Title</label><input data-field="title" value="${esc(it.title)}">
