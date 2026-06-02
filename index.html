@@ -1854,29 +1854,39 @@ function render() {
       else if (action === "saveEdit") {
         const form = list.querySelector('[data-form="' + CSS.escape(key) + '"]'); if (!form) return;
         const _oldTitle = baseItem.title, _oldSource = baseItem.source;
+        // Capture the key BEFORE any mutation. title + source form the DB/state key, so
+        // notes, owner, fav, etc. are all stored under this.
+        const _oldKey = baseItem._origKey || itemKeyOf({ title: _oldTitle, source: _oldSource });
         const fields = {}; form.querySelectorAll("[data-field]").forEach(inp => { fields[inp.dataset.field] = inp.value; });
         Object.assign(baseItem, fields);
         const prodSel = form.querySelector('select[data-prodstatus]');
         if (prodSel) setProdStatus(baseItem, prodSel.value);
+        const _newKey = itemKey(baseItem);
+        // CRITICAL: if the key changed (title/source edited), migrate ALL associated team
+        // data from the old key to the new key BEFORE we recompute or re-render — otherwise
+        // the renamed row renders under its new key while notes still live under the old key,
+        // making them appear to vanish. setProdStatus() above may already have written the new
+        // prod status under _newKey, so we must not clobber that: merge, don't overwrite.
+        if (_oldKey !== _newKey) {
+          ["favs","archived","music","owners","contacted","itemNotes","opp","prodStatus","edits"].forEach(mapName => {
+            const m = state[mapName]; if (!m) return;
+            if (Object.prototype.hasOwnProperty.call(m, _oldKey)) {
+              if (!Object.prototype.hasOwnProperty.call(m, _newKey)) m[_newKey] = m[_oldKey];
+              delete m[_oldKey];
+            }
+          });
+          baseItem._origKey = _newKey;
+        }
         recomputeAllSignals();
         const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value); render();
         suppressRealtime(8000); slSaveItem(baseItem);
-        // Title + source form the DB key. If either changed, delete the orphaned old row AND
-        // carry team data (notes, owner, favorite, archive, music, contacted, prod status) from
-        // the old key to the new one so nothing detaches on rename.
+        // Remove the orphaned old DB row now that the new one is saved and data is migrated.
         if (baseItem.title !== _oldTitle || baseItem.source !== _oldSource) {
           slDeleteItem({ title: _oldTitle, source: _oldSource });
-          const _oldKey = baseItem._origKey || ((_oldTitle || "").toLowerCase().trim() + "|" + (_oldSource || ""));
-          const _newKey = itemKey(baseItem);
-          if (_oldKey !== _newKey) {
-            ["favs","archived","music","owners","contacted","itemNotes","prodStatus","opp"].forEach(mapName => {
-              const m = state[mapName];
-              if (m && Object.prototype.hasOwnProperty.call(m, _oldKey)) { m[_newKey] = m[_oldKey]; delete m[_oldKey]; }
-            });
-            baseItem._origKey = _newKey;
-          }
         }
-        const k = itemKey(baseItem); if (state.edits[k]) { delete state.edits[k]; } suppressRealtime(); saveState(state);
+        // The inline edit is now folded into the base item; drop any leftover edit overlay.
+        if (state.edits[_newKey]) { delete state.edits[_newKey]; }
+        suppressRealtime(); saveState(state);
       }
       else if (action === "deleteAdded") {
         if (!confirm(`Delete "${baseItem.title}"?`)) return;
