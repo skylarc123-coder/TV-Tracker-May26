@@ -1008,25 +1008,26 @@ async function agSave(arr) {
 }
 async function loadState() {
   const data = await sbGet('/rest/v1/slate_state?id=eq.singleton&select=*');
-  if (!data || !data.length) return { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {}, contacted: {}, itemNotes: {}, prodStatus: {}, opp: {}, last_refreshed: LAST_REFRESHED };
+  if (!data || !data.length) return { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {}, contacted: {}, itemNotes: {}, prodStatus: {}, opp: {}, season: {}, last_refreshed: LAST_REFRESHED };
   const ed = data[0].edits || {};
-  // Pull music/owners/contacted/notes/prodStatus/opp out of edits sub-objects (we piggyback on the existing JSONB edits column).
+  // Pull music/owners/contacted/notes/prodStatus/opp/season out of edits sub-objects (we piggyback on the existing JSONB edits column).
   const music = (ed.__music && typeof ed.__music === 'object') ? ed.__music : {};
   const owners = (ed.__owners && typeof ed.__owners === 'object') ? ed.__owners : {};
   const contacted = (ed.__contacted && typeof ed.__contacted === 'object') ? ed.__contacted : {};
   const itemNotes = (ed.__notes && typeof ed.__notes === 'object') ? ed.__notes : {};
   const prodStatus = (ed.__prodstatus && typeof ed.__prodstatus === 'object') ? ed.__prodstatus : {};
   const opp = (ed.__opp && typeof ed.__opp === 'object') ? ed.__opp : {};
+  const season = (ed.__season && typeof ed.__season === 'object') ? ed.__season : {};
   const cleanEdits = Object.assign({}, ed);
-  delete cleanEdits.__music; delete cleanEdits.__owners; delete cleanEdits.__contacted; delete cleanEdits.__notes; delete cleanEdits.__prodstatus; delete cleanEdits.__opp;
-  const s = { favs: data[0].favs || {}, archived: data[0].archived || {}, edits: cleanEdits, added: data[0].added || [], music, owners, contacted, itemNotes, prodStatus, opp, last_refreshed: data[0].last_refreshed || LAST_REFRESHED };
+  delete cleanEdits.__music; delete cleanEdits.__owners; delete cleanEdits.__contacted; delete cleanEdits.__notes; delete cleanEdits.__prodstatus; delete cleanEdits.__opp; delete cleanEdits.__season;
+  const s = { favs: data[0].favs || {}, archived: data[0].archived || {}, edits: cleanEdits, added: data[0].added || [], music, owners, contacted, itemNotes, prodStatus, opp, season, last_refreshed: data[0].last_refreshed || LAST_REFRESHED };
   try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
   return s;
 }
 async function saveState(s) {
   try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
   // Pack music/owners into the edits JSONB so we don't need a schema change.
-  const editsPayload = Object.assign({}, s.edits || {}, { __music: s.music || {}, __owners: s.owners || {}, __contacted: s.contacted || {}, __notes: s.itemNotes || {}, __prodstatus: s.prodStatus || {}, __opp: s.opp || {} });
+  const editsPayload = Object.assign({}, s.edits || {}, { __music: s.music || {}, __owners: s.owners || {}, __contacted: s.contacted || {}, __notes: s.itemNotes || {}, __prodstatus: s.prodStatus || {}, __opp: s.opp || {}, __season: s.season || {} });
   sbPatch('/rest/v1/slate_state?id=eq.singleton', { favs: s.favs, archived: s.archived, edits: editsPayload, added: s.added, updated_at: new Date().toISOString() });
 }
 
@@ -1125,7 +1126,7 @@ async function pollRemoteState() {
     state.edits = state.edits || {}; state.added = state.added || [];
     state.music = state.music || {}; state.owners = state.owners || {};
   state.contacted = state.contacted || {}; state.itemNotes = state.itemNotes || {};
-  state.prodStatus = state.prodStatus || {}; state.opp = state.opp || {};
+  state.prodStatus = state.prodStatus || {}; state.opp = state.opp || {}; state.season = state.season || {};
     if (state.added.length) {
       state.added.forEach(a => {
         if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) {
@@ -1290,7 +1291,7 @@ recomputeAllSignals();
 // === Async app init ===============================================================
 let channels = [];
 let agreements = [];
-let state = { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {}, contacted: {}, itemNotes: {}, prodStatus: {}, opp: {} };
+let state = { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {}, contacted: {}, itemNotes: {}, prodStatus: {}, opp: {}, season: {} };
 
 async function initApp() {
   try { _renderMcpDiagBadge(); } catch {}
@@ -1309,9 +1310,10 @@ async function initApp() {
         const itemNotes = (ed.__notes && typeof ed.__notes === 'object') ? ed.__notes : {};
         const prodStatus = (ed.__prodstatus && typeof ed.__prodstatus === 'object') ? ed.__prodstatus : {};
         const opp = (ed.__opp && typeof ed.__opp === 'object') ? ed.__opp : {};
+        const season = (ed.__season && typeof ed.__season === 'object') ? ed.__season : {};
         const cleanEdits = Object.assign({}, ed);
-        delete cleanEdits.__music; delete cleanEdits.__owners; delete cleanEdits.__contacted; delete cleanEdits.__notes; delete cleanEdits.__prodstatus; delete cleanEdits.__opp;
-        state = { favs: s.favs || {}, archived: s.archived || {}, edits: cleanEdits, added: s.added || [], music, owners, contacted, itemNotes, prodStatus, opp };
+        delete cleanEdits.__music; delete cleanEdits.__owners; delete cleanEdits.__contacted; delete cleanEdits.__notes; delete cleanEdits.__prodstatus; delete cleanEdits.__opp; delete cleanEdits.__season;
+        state = { favs: s.favs || {}, archived: s.archived || {}, edits: cleanEdits, added: s.added || [], music, owners, contacted, itemNotes, prodStatus, opp, season };
         if (s.last_refreshed) LAST_REFRESHED = s.last_refreshed;
       }
       try {
@@ -1339,7 +1341,7 @@ async function initApp() {
   state.edits = state.edits || {}; state.added = state.added || [];
   state.music = state.music || {}; state.owners = state.owners || {};
   state.contacted = state.contacted || {}; state.itemNotes = state.itemNotes || {};
-  state.prodStatus = state.prodStatus || {}; state.opp = state.opp || {};
+  state.prodStatus = state.prodStatus || {}; state.opp = state.opp || {}; state.season = state.season || {};
   if (state.added.length) {
     state.added.forEach(a => { if (!items.find(it => itemKeyOf(it) === itemKeyOf(a))) items.unshift({ ...a, _userAdded: true }); });
   }
@@ -1547,6 +1549,13 @@ function saveOpp(it, num, url) {
   if (num || url) state.opp[k] = { num, url }; else delete state.opp[k];
   suppressRealtime(); saveState(state);
 }
+function getSeason(it) { return (state.season && state.season[it._origKey || itemKey(it)]) || ""; }
+function saveSeason(it, value) {
+  const k = itemKey(it);
+  state.season = state.season || {};
+  if (value && String(value).trim()) state.season[k] = String(value).trim(); else delete state.season[k];
+  suppressRealtime(); saveState(state);
+}
 function getNote(it) { return (state.itemNotes && state.itemNotes[it._origKey || itemKey(it)]) || ""; }
 function saveNote(it, value) {
   const k = itemKey(it);
@@ -1573,7 +1582,7 @@ function getProdStatus(it) {
 }
 function setProdStatus(it, val) {
   const k = itemKey(it);
-  state.prodStatus = state.prodStatus || {}; state.opp = state.opp || {};
+  state.prodStatus = state.prodStatus || {}; state.opp = state.opp || {}; state.season = state.season || {};
   state.prodStatus[k] = PROD_STATUSES.includes(val) ? val : "";
   suppressRealtime(); saveState(state);
 }
@@ -1680,6 +1689,7 @@ function render() {
     const owner = getOwner(it);
     const contacted = isContacted(it);
     const opp = getOpp(it);
+    const season = getSeason(it);
     const noteVal = getNote(it);
     const prodStatus = getProdStatus(it);
     const showMarket = MARKET_STATUSES.includes(it.status);
@@ -1717,6 +1727,7 @@ function render() {
           ${it.dateAdded ? `<span class="added-on">· added ${esc(it.dateAdded)}</span>` : ''}
         </div>
         <div class="detail">${esc(it.detail)}</div>
+        ${season ? `<div class="prod-status season"><span class="label">Season:</span> ${esc(season)}</div>` : ""}
         ${it.prod ? `<div class="prod-status"><span class="label">Production:</span> ${esc(it.prod)}</div>` : ""}
         ${it.airDate ? `<div class="prod-status air-date"><span class="label">Air Date:</span> ${esc(it.airDate)}</div>` : ""}
         <div class="signals">
@@ -1759,6 +1770,7 @@ function render() {
           <select data-field="source">${["trade","crew"].map(s => `<option value="${s}"${s===it.source?' selected':''}>${s}</option>`).join("")}</select>
           <label>Date Added</label><input type="date" data-field="dateAdded" value="${esc(it.dateAdded||'')}">
           <label>Detail</label><textarea data-field="detail">${esc(it.detail)}</textarea>
+          <label>Season</label><input data-season="1" value="${esc(season)}" placeholder="e.g. 3 or S3">
           <label>Production</label><textarea data-field="prod">${esc(it.prod || '')}</textarea>
           <label>Air Date</label><input data-field="airDate" value="${esc(it.airDate || '')}" placeholder="e.g. Fall 2026 or 2026-09-15">
           <div class="btn-row">
@@ -1866,6 +1878,8 @@ function render() {
         Object.assign(baseItem, fields);
         const prodSel = form.querySelector('select[data-prodstatus]');
         if (prodSel) setProdStatus(baseItem, prodSel.value);
+        const seasonInp = form.querySelector('input[data-season]');
+        if (seasonInp) saveSeason(baseItem, seasonInp.value);
         const _newKey = itemKey(baseItem);
         // CRITICAL: if the key changed (title/source edited), migrate ALL associated team
         // data from the old key to the new key BEFORE we recompute or re-render — otherwise
@@ -1873,7 +1887,7 @@ function render() {
         // making them appear to vanish. setProdStatus() above may already have written the new
         // prod status under _newKey, so we must not clobber that: merge, don't overwrite.
         if (_oldKey !== _newKey) {
-          ["favs","archived","music","owners","contacted","itemNotes","opp","prodStatus","edits"].forEach(mapName => {
+          ["favs","archived","music","owners","contacted","itemNotes","opp","season","prodStatus","edits"].forEach(mapName => {
             const m = state[mapName]; if (!m) return;
             if (Object.prototype.hasOwnProperty.call(m, _oldKey)) {
               if (!Object.prototype.hasOwnProperty.call(m, _newKey)) m[_newKey] = m[_oldKey];
@@ -2061,9 +2075,10 @@ async function _doManualSync(btn) {
           const itemNotes = (ed.__notes && typeof ed.__notes === 'object') ? ed.__notes : {};
           const prodStatus = (ed.__prodstatus && typeof ed.__prodstatus === 'object') ? ed.__prodstatus : {};
           const opp = (ed.__opp && typeof ed.__opp === 'object') ? ed.__opp : {};
+          const season = (ed.__season && typeof ed.__season === 'object') ? ed.__season : {};
           const cleanEdits = Object.assign({}, ed);
-          delete cleanEdits.__music; delete cleanEdits.__owners; delete cleanEdits.__contacted; delete cleanEdits.__notes; delete cleanEdits.__prodstatus; delete cleanEdits.__opp;
-          state = { favs: s.favs || {}, archived: s.archived || {}, edits: cleanEdits, added: s.added || [], music, owners, contacted, itemNotes, prodStatus, opp };
+          delete cleanEdits.__music; delete cleanEdits.__owners; delete cleanEdits.__contacted; delete cleanEdits.__notes; delete cleanEdits.__prodstatus; delete cleanEdits.__opp; delete cleanEdits.__season;
+          state = { favs: s.favs || {}, archived: s.archived || {}, edits: cleanEdits, added: s.added || [], music, owners, contacted, itemNotes, prodStatus, opp, season };
         }
         try {
           localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(channels));
