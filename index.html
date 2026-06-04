@@ -154,6 +154,26 @@
   .sig.pot-Medium   { background: #e3eef9; border-color: #b7cce4; color: #1f5fa8; }
   .sig.pot-Medium .k{ color: #1f5fa8; }
   .sig.pot-Low      { background: #ececec; border-color: #d3cfc3; color: #555; }
+  /* 6-tier royalty classification (rate-driven) */
+  .sig.pot-veryhigh  { background: #e7dcf5; border-color: #b49ce0; color: #4a1f73; }
+  .sig.pot-veryhigh .k { color: #4a1f73; }
+  .sig.pot-high      { background: #efe6f7; border-color: #c5b8e6; color: #5e2f87; }
+  .sig.pot-high .k   { color: #5e2f87; }
+  .sig.pot-medium    { background: #e3eef9; border-color: #b7cce4; color: #1f5fa8; }
+  .sig.pot-medium .k { color: #1f5fa8; }
+  .sig.pot-low       { background: #f0ede6; border-color: #d8d2c4; color: #6b6552; }
+  .sig.pot-low .k    { color: #6b6552; }
+  .sig.pot-verylow   { background: #f0f0f0; border-color: #dad6cc; color: #777; }
+  .sig.pot-verylow .k{ color: #777; }
+  .sig.pot-zero      { background: #ececec; border-color: #d3cfc3; color: #999; }
+  .sig.pot-zero .k   { color: #999; }
+  select.pot-veryhigh{ color: #4a1f73; }
+  select.pot-high    { color: #5e2f87; }
+  select.pot-medium  { color: #1f5fa8; }
+  select.pot-low     { color: #6b6552; }
+  select.pot-verylow { color: #777; }
+  select.pot-zero    { color: #999; }
+  .prob-muted        { opacity: 0.65; }
   .sig.prob-High    { background: #fde8e3; border-color: #f0b8a8; color: #a83019; }
   .sig.prob-High .k { color: #a83019; }
   .sig.prob-Medium  { background: #fff3d6; border-color: #e6c97a; color: #876200; }
@@ -405,9 +425,12 @@
       <div class="ms-filter" data-filter="royalty">
         <button class="ms-btn" type="button">Royalty: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
         <div class="ms-menu">
+          <label><input type="checkbox" value="Very High"> Very High</label>
           <label><input type="checkbox" value="High"> High</label>
           <label><input type="checkbox" value="Medium"> Medium</label>
           <label><input type="checkbox" value="Low"> Low</label>
+          <label><input type="checkbox" value="Very Low"> Very Low</label>
+          <label><input type="checkbox" value="Zero"> Zero</label>
           <button type="button" class="ms-clear">Clear all</button>
         </div>
       </div>
@@ -499,7 +522,7 @@
     </div>
     <div class="stats" id="stats"></div>
     <div id="list"></div>
-    <footer>Prototype slate. Royalty Potential, Rerun Probability, and Covered Under License are mocked. Channels and Agreements dashboard edits flow back into the priority score.</footer>
+    <footer>Prototype slate. Priority score is driven by Royalty Potential (auto-derived from each channel's Average Royalty Rate), production status, and license coverage. Rerun Probability is shown for reference but no longer affects the score.</footer>
   </section>
 
   <section id="tab-channels" class="tab-section">
@@ -518,9 +541,9 @@
         <th style="width:200px;">Channel / Network</th>
         <th style="width:150px;">Type</th>
         <th style="width:160px;">Parent Company</th>
-        <th style="width:140px;">Royalty Potential</th>
-        <th style="width:130px;">Payout (0–100)</th>
-        <th style="width:150px;">Rerun Probability</th>
+        <th style="width:130px;">Avg Royalty Rate</th>
+        <th style="width:140px;">Royalty Potential <span style="font-weight:400;opacity:.6;">(auto)</span></th>
+        <th style="width:150px;">Rerun Probability <span style="font-weight:400;opacity:.6;">(not scored)</span></th>
         <th style="width:60px;">Notes</th>
         <th style="width:60px;"></th>
       </tr></thead>
@@ -1240,8 +1263,14 @@ const ROYALTY_HIGH = /\b(HBO|Max|Netflix|NBC|CBS|ABC|FOX|Hulu|Apple TV\+|Disney\
 const ROYALTY_MED  = /\b(FX|AMC|Bravo|MTV|TLC|HGTV|History|Discovery|Travel Channel|VH1|Freeform|Comedy Central|E!|Starz|Showtime|Tubi|BritBox|Hallmark)\b/i;
 function computeRoyaltyPotential(it) {
   const ch = lookupChannel(it.network);
-  if (ch && ch.royaltyPotential) { it._royaltySource = "db"; return ch.royaltyPotential; }
-  it._royaltySource = "heuristic";
+  if (ch) {
+    it._royaltySource = "db";
+    const p = parseInt(ch.proPayout);
+    it._proPayout = isNaN(p) ? 0 : Math.max(0, p);
+    // Classification is always derived from the Average Royalty Rate (authoritative).
+    return classifyRoyalty(it._proPayout);
+  }
+  it._royaltySource = "heuristic"; it._proPayout = null;
   const net = (it.network || "");
   if (ROYALTY_HIGH.test(net)) return "High";
   if (ROYALTY_MED.test(net))  return "Medium";
@@ -1269,15 +1298,21 @@ function computeCovered(it) {
   if (!studio || /TBC|Production company TBC|Unknown/i.test(studio)) return "Unknown";
   return "No";
 }
+// Royalty classification → points (dominant signal, max 60). Rate-driven via classifyRoyalty().
+const ROYALTY_POINTS = { "Very High": 60, "High": 48, "Medium": 36, "Low": 24, "Very Low": 12, "Zero": 0 };
 function computePriority(it) {
   let score = 0;
-  if (it._royalty === "High") score += 30; else if (it._royalty === "Medium") score += 20; else score += 10;
-  if (it._rerunProb === "High") score += 25; else if (it._rerunProb === "Medium") score += 15; else score += 5;
+  // Royalty potential (derived from the channel's Average Royalty Rate) is the dominant signal.
+  score += (it._royalty in ROYALTY_POINTS) ? ROYALTY_POINTS[it._royalty] : 24;
+  // Rerun probability is intentionally NOT scored (kept on the dashboard for reference only).
   if (it.status === "renew")        score += 20;
+  else if (it.status === "inprod")  score += 18;
   else if (it.status === "prepro")  score += 18;
   else if (it.status === "postpro") score += 16;
   else if (it.status === "pickup")  score += 15;
+  else if (it.status === "wrapped") score += 10;
   else if (it.status === "indev")   score += 12;
+  else if (it.status === "ending")  score += 10;
   else if (it.status === "cancel")  score += 5;
   if (it._covered === "Yes") score += 15;
   else if (it._covered === "Unknown") score += 2;
@@ -1742,8 +1777,8 @@ function render() {
         ${it.prod ? `<div class="prod-status"><span class="label">Production:</span> ${esc(it.prod)}</div>` : ""}
         ${it.airDate ? `<div class="prod-status air-date"><span class="label">Air Date:</span> ${esc(it.airDate)}</div>` : ""}
         <div class="signals">
-          <span class="sig pot-${it._royalty}${it._royaltySource==='db'?' from-db':''}"><span class="k">Royalty Potential</span> ${it._royalty}</span>
-          <span class="sig prob-${it._rerunProb}${it._rerunSource==='db'?' from-db':''}"><span class="k">Rerun Probability</span> ${it._rerunProb}</span>
+          <span class="sig ${potClass(it._royalty)}${it._royaltySource==='db'?' from-db':''}"><span class="k">Royalty Potential</span> ${it._royalty}</span>
+          <span class="sig prob-${it._rerunProb}${it._rerunSource==='db'?' from-db':''} prob-muted" title="Rerun probability is not factored into the priority score"><span class="k">Rerun Probability</span> ${it._rerunProb}</span>
           <span class="sig cov-${covered}${it._licenseSource==='db'?' from-db':''}"><span class="k">Covered Under License</span> ${covered}</span>
           <span class="sig music-edit"><span class="k">Music</span><input type="text" data-action="music-input" data-key="${esc(k)}" value="${esc(musicVal)}" placeholder="Add music style…"></span>
         </div>
@@ -2189,7 +2224,21 @@ const CH_TYPES = [
   { value: "streaming-premium", label: "Streaming - Premium" },
   { value: "streaming-fast",    label: "Streaming - FAST" }
 ];
-const CH_LEVELS = ["High", "Medium", "Low"];
+const CH_LEVELS = ["High", "Medium", "Low"]; // rerun probability levels
+// 6-tier royalty classification, auto-derived from the Average Royalty Rate.
+const CH_ROYALTY_LEVELS = ["Very High", "High", "Medium", "Low", "Very Low", "Zero"];
+function classifyRoyalty(rate) {
+  const r = parseInt(rate);
+  if (isNaN(r) || r <= 0) return "Zero";
+  if (r >= 90) return "Very High";
+  if (r >= 60) return "High";
+  if (r >= 40) return "Medium";
+  if (r >= 20) return "Low";
+  return "Very Low"; // 1–19
+}
+function potClass(label) {
+  return "pot-" + String(label || "").toLowerCase().replace(/[^a-z]/g, "");
+}
 // Normalize legacy single "streaming" value to the new Premium option.
 function chNormType(t) { return t === "streaming" ? "streaming-premium" : (t || "broadcast"); }
 function chTypeLabel(t) { const m = CH_TYPES.find(x => x.value === chNormType(t)); return m ? m.label : (t || ""); }
@@ -2207,8 +2256,8 @@ function chRowHtml(c) {
       <td><input type="text" data-field="name" value="${esc(c.name)}" style="font-weight:600;"></td>
       <td><select data-field="type">${CH_TYPES.map(t => `<option value="${t.value}"${t.value===typeVal?' selected':''}>${esc(t.label)}</option>`).join("")}</select></td>
       <td><input type="text" data-field="parentCompany" value="${esc(c.parentCompany||'')}" placeholder="e.g. Warner Bros. Discovery"></td>
-      <td><select data-field="royaltyPotential" class="pot-${esc(c.royaltyPotential)}">${CH_LEVELS.map(l => `<option value="${l}"${l===c.royaltyPotential?' selected':''}>${l}</option>`).join("")}</select></td>
-      <td><input type="number" min="0" max="100" data-field="proPayout" value="${c.proPayout||0}"></td>
+      <td><input type="number" min="0" step="1" data-field="proPayout" value="${c.proPayout||0}" title="Average royalty rate — auto-sets Royalty Potential" style="width:90px;"></td>
+      <td><select data-field="royaltyPotential" class="${potClass(classifyRoyalty(c.proPayout))}" disabled title="Auto-derived from the Average Royalty Rate">${CH_ROYALTY_LEVELS.map(l => `<option value="${l}"${l===classifyRoyalty(c.proPayout)?' selected':''}>${l}</option>`).join("")}</select></td>
       <td><select data-field="rerunProbability" class="prob-${esc(c.rerunProbability)}">${CH_LEVELS.map(l => `<option value="${l}"${l===c.rerunProbability?' selected':''}>${l}</option>`).join("")}</select></td>
       <td style="text-align:center;"><span class="expand-btn ${open?'open':''}" data-action="ch-expand" data-idx="${realIdx}" title="Expand for detailed notes">${open?'▼':'▶'}</span></td>
       <td style="text-align:center;"><span class="icon-btn" data-action="ch-delete" data-idx="${realIdx}" title="Delete row">✕</span></td>
@@ -2273,11 +2322,18 @@ function renderChannels() {
         updateBannerCounts();
         return;
       }
-      if (field === "proPayout") val = Math.max(0, Math.min(100, parseInt(val) || 0));
+      if (field === "proPayout") val = Math.max(0, parseInt(val) || 0);
       let _renamedFrom = null;
       if (field === "name") { const oldName = channels[idx].name; if (oldName && oldName !== val) _renamedFrom = oldName; }
       channels[idx][field] = val;
-      if (field === "royaltyPotential") e.target.className = "pot-" + val;
+      if (field === "proPayout") {
+        // Average Royalty Rate drives the Royalty Potential classification automatically.
+        const cls = classifyRoyalty(val);
+        channels[idx].royaltyPotential = cls;
+        const tr2 = e.target.closest("tr");
+        const sel = tr2 && tr2.querySelector('select[data-field="royaltyPotential"]');
+        if (sel) { sel.value = cls; sel.className = potClass(cls); }
+      }
       if (field === "rerunProbability") e.target.className = "prob-" + val;
       suppressRealtime(8000);
       if (_renamedFrom) chDeleteRow(_renamedFrom);
@@ -2323,14 +2379,10 @@ function renderChannels() {
 }
 function chUpdateStats() {
   const total = channels.length;
-  const pH = channels.filter(c => c.royaltyPotential === "High").length;
-  const pM = channels.filter(c => c.royaltyPotential === "Medium").length;
-  const pL = channels.filter(c => c.royaltyPotential === "Low").length;
-  const rH = channels.filter(c => c.rerunProbability === "High").length;
-  const rM = channels.filter(c => c.rerunProbability === "Medium").length;
-  const rL = channels.filter(c => c.rerunProbability === "Low").length;
+  const cnt = lbl => channels.filter(c => classifyRoyalty(c.proPayout) === lbl).length;
+  const vh = cnt("Very High"), pH = cnt("High"), pM = cnt("Medium"), pL = cnt("Low"), vl = cnt("Very Low"), pz = cnt("Zero");
   const avg = total ? Math.round(channels.reduce((s,c) => s + (parseInt(c.proPayout)||0), 0) / total) : 0;
-  const summary = `${total} channels · Royalty High ${pH} / Med ${pM} / Low ${pL} · Rerun High ${rH} / Med ${rM} / Low ${rL} · Avg payout ${avg}/100`;
+  const summary = `${total} channels · Royalty VeryHigh ${vh} / High ${pH} / Med ${pM} / Low ${pL} / VeryLow ${vl} / Zero ${pz} · Avg rate ${avg}`;
   const s = document.getElementById("ch-stats"); if (s) s.textContent = summary;
 }
 document.getElementById("ch-addRow").addEventListener("click", () => {
