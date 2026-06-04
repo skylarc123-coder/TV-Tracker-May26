@@ -605,6 +605,26 @@
 const SB_URL = 'https://yhpdkoscfnsoozhyhufj.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlocGRrb3NjZm5zb296aHlodWZqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MTI3MDYsImV4cCI6MjA5NTM4ODcwNn0.r6u7sDKqskKYRD5t56Si1PwK5hQjITjCC3B3G7JNH3I';
 const SB_H = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
+// Fetch wrapper that refreshes the auth token and retries once on a 401 (website only).
+// Fixes browser edits silently failing to save when the access token has expired
+// (e.g. tab left idle/asleep past expiry, before the 45-min refresh timer fires).
+async function _authedFetch(url, opts) {
+  opts = opts || {};
+  let r = await fetch(url, opts);
+  if (r.status === 401 && typeof _refreshSession === 'function') {
+    let s = null; try { s = _authLoad(); } catch (e) {}
+    if (s && s.refresh_token) {
+      const f = await _refreshSession(s.refresh_token);
+      if (f && f.access_token) {
+        try { _authStore(f); } catch (e) {}
+        try { _applyToken(f.access_token); } catch (e) {}
+        const h2 = { ...(opts.headers || {}), 'Authorization': 'Bearer ' + f.access_token };
+        r = await fetch(url, { ...opts, headers: h2 });
+      }
+    }
+  }
+  return r;
+}
 const SB_PROJECT_ID = 'yhpdkoscfnsoozhyhufj';
 const SB_MCP_TOOL = 'mcp__5165bf0c-b72b-4133-97da-461912cb6752__execute_sql';
 const IS_COWORK = typeof window !== 'undefined' && window.cowork && typeof window.cowork.callMcpTool === 'function';
@@ -773,7 +793,7 @@ async function sbGet(path) {
     console.warn('sbGet: no MCP mapping for path', path);
     return null;
   }
-  try { const r = await fetch(SB_URL + path, { headers: SB_H }); return r.ok ? r.json() : null; } catch { return null; }
+  try { const r = await _authedFetch(SB_URL + path, { headers: { ...SB_H } }); return r.ok ? r.json() : null; } catch { return null; }
 }
 
 async function sbUpsert(path, body) {
@@ -808,7 +828,7 @@ async function sbUpsert(path, body) {
   if (path === '/rest/v1/channels' && url.indexOf('on_conflict') < 0)        url += '?on_conflict=name';
   else if (path === '/rest/v1/agreements' && url.indexOf('on_conflict') < 0) url += '?on_conflict=entity';
   try {
-    const r = await fetch(url, { method: 'POST', headers: { ...SB_H, 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) });
+    const r = await _authedFetch(url, { method: 'POST', headers: { ...SB_H, 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) });
     let errText = '';
     if (!r.ok) { try { errText = await r.text(); } catch {} }
     _logSb('upsert', url, r.status, r.ok ? 'ok' : errText);
@@ -827,7 +847,7 @@ async function sbPatch(path, body) {
     return;
   }
   try {
-    const r = await fetch(SB_URL + path, { method: 'PATCH', headers: { ...SB_H, 'Prefer': 'return=minimal' }, body: JSON.stringify(body) });
+    const r = await _authedFetch(SB_URL + path, { method: 'PATCH', headers: { ...SB_H, 'Prefer': 'return=minimal' }, body: JSON.stringify(body) });
     let errText = '';
     if (!r.ok) { try { errText = await r.text(); } catch {} }
     _logSb('patch', SB_URL + path, r.status, r.ok ? 'ok' : errText);
@@ -846,7 +866,7 @@ async function sbDel(path) {
     return;
   }
   try {
-    const r = await fetch(SB_URL + path, { method: 'DELETE', headers: { ...SB_H, 'Prefer': 'return=minimal' } });
+    const r = await _authedFetch(SB_URL + path, { method: 'DELETE', headers: { ...SB_H, 'Prefer': 'return=minimal' } });
     let errText = '';
     if (!r.ok) { try { errText = await r.text(); } catch {} }
     _logSb('delete', SB_URL + path, r.status, r.ok ? 'ok' : errText);
@@ -910,7 +930,7 @@ async function slSaveItem(it) {
   }];
   const url = SB_URL + '/rest/v1/slate_items?on_conflict=id';
   try {
-    const r = await fetch(url, { method: 'POST', headers: { ...SB_H, 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) });
+    const r = await _authedFetch(url, { method: 'POST', headers: { ...SB_H, 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) });
     let errText = ''; if (!r.ok) { try { errText = await r.text(); } catch {} }
     _logSb('upsert-item', url, r.status, r.ok ? 'ok' : errText);
   } catch (e) { _logSb('upsert-item', url, 0, (e && e.message) || String(e)); }
@@ -920,7 +940,7 @@ async function slDeleteItem(it) {
   if (IS_COWORK) { await _mcpSql("DELETE FROM slate_items WHERE id = " + _sqlStr(id)); return; }
   const url = SB_URL + '/rest/v1/slate_items?id=eq.' + encodeURIComponent(id);
   try {
-    const r = await fetch(url, { method: 'DELETE', headers: { ...SB_H, 'Prefer': 'return=minimal' } });
+    const r = await _authedFetch(url, { method: 'DELETE', headers: { ...SB_H, 'Prefer': 'return=minimal' } });
     let errText = ''; if (!r.ok) { try { errText = await r.text(); } catch {} }
     _logSb('delete-item', url, r.status, r.ok ? 'ok' : errText);
   } catch (e) { _logSb('delete-item', url, 0, (e && e.message) || String(e)); }
