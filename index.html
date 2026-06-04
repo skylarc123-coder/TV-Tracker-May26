@@ -134,9 +134,12 @@
     font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
     border: 1px solid transparent; }
   .priority .score { font-weight: 600; opacity: .82; font-size: 11px; }
+  .p-veryhigh { background: #fbdcd2; color: #8a210d; border-color: #eaa18c; }
   .p-high { background: #fde8e3; color: #a83019; border-color: #f0b8a8; }
+  .p-medium  { background: #fff3d6; color: #876200; border-color: #e6c97a; }
   .p-med  { background: #fff3d6; color: #876200; border-color: #e6c97a; }
-  .p-low  { background: #e6efe9; color: #3a6650; border-color: #b7d4c2; }
+  .p-low  { background: #eef4ef; color: #4a6e58; border-color: #c6dccf; }
+  .p-verylow  { background: #e6efe9; color: #3a6650; border-color: #b7d4c2; }
 
   .signals { display: flex; flex-wrap: wrap; gap: 8px;
     margin-top: 6px; font-size: 11.5px; color: var(--muted);
@@ -416,9 +419,11 @@
       <div class="ms-filter" data-filter="priority">
         <button class="ms-btn" type="button">Priority: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
         <div class="ms-menu">
-          <label><input type="checkbox" value="high"> High</label>
-          <label><input type="checkbox" value="med"> Medium</label>
-          <label><input type="checkbox" value="low"> Low</label>
+          <label><input type="checkbox" value="Very High"> Very High</label>
+          <label><input type="checkbox" value="High"> High</label>
+          <label><input type="checkbox" value="Medium"> Medium</label>
+          <label><input type="checkbox" value="Low"> Low</label>
+          <label><input type="checkbox" value="Very Low"> Very Low</label>
           <button type="button" class="ms-clear">Clear all</button>
         </div>
       </div>
@@ -531,7 +536,7 @@
     </div>
     <div class="stats" id="stats"></div>
     <div id="list"></div>
-    <footer>Prototype slate. Priority is currently driven solely by Royalty Potential (auto-set from each channel's Average Royalty Rate, manually overridable): Very High / High → High priority, Medium → Medium, Low / Very Low / Zero → Low. Production status, Rerun Probability and License Coverage are shown for reference but do not affect priority for now.</footer>
+    <footer>Prototype slate. Priority mirrors each channel's Royalty Potential 1:1 (Very High / High / Medium / Low / Very Low), set manually on the Channels tab. Average Royalty Rate, Rerun Probability, Travel Probability and License Coverage are shown for reference but do not affect priority for now.</footer>
   </section>
 
   <section id="tab-channels" class="tab-section">
@@ -551,8 +556,9 @@
         <th style="width:150px;">Type</th>
         <th style="width:160px;">Parent Company</th>
         <th style="width:130px;">Avg Royalty Rate</th>
-        <th style="width:140px;">Royalty Potential <span style="font-weight:400;opacity:.6;">(auto)</span></th>
         <th style="width:150px;">Rerun Probability <span style="font-weight:400;opacity:.6;">(not scored)</span></th>
+        <th style="width:150px;">Travel Probability <span style="font-weight:400;opacity:.6;">(not scored)</span></th>
+        <th style="width:140px;">Royalty Potential <span style="font-weight:400;opacity:.6;">(drives priority)</span></th>
         <th style="width:60px;">Notes</th>
         <th style="width:60px;"></th>
       </tr></thead>
@@ -605,7 +611,7 @@ const IS_COWORK = typeof window !== 'undefined' && window.cowork && typeof windo
 
 // SQL value helpers
 function _sqlStr(v) { if (v == null) return 'NULL'; return "'" + String(v).replace(/'/g, "''") + "'"; }
-function _sqlNum(v) { const n = parseInt(v); return isNaN(n) ? 'NULL' : String(n); }
+function _sqlNum(v) { const n = parseFloat(v); return isNaN(n) ? 'NULL' : String(n); }
 function _sqlJson(v) { return "'" + JSON.stringify(v == null ? null : v).replace(/'/g, "''") + "'::jsonb"; }
 
 // Robustly extract a row array from whatever shape execute_sql returns.
@@ -775,11 +781,11 @@ async function sbUpsert(path, body) {
     if (!body || !body.length) return;
     if (path === '/rest/v1/channels') {
       const tuples = body.map(c => "(" +
-        _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parent_company || '') + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
-        _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", " + _sqlJson(c.aliases || []) + ", NOW())").join(", ");
-      const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, aliases, updated_at) VALUES " + tuples +
+        _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parent_company || '') + ", " + _sqlStr(c.royalty_potential || null) + ", " + _sqlNum(c.pro_payout) + ", " +
+        _sqlStr(c.rerun_probability || null) + ", " + _sqlStr(c.travel_probability || null) + ", " + _sqlStr(c.notes || '') + ", " + _sqlJson(c.aliases || []) + ", NOW())").join(", ");
+      const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, travel_probability, notes, aliases, updated_at) VALUES " + tuples +
         " ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, parent_company=EXCLUDED.parent_company, royalty_potential=EXCLUDED.royalty_potential, " +
-        "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, aliases=EXCLUDED.aliases, updated_at=NOW()";
+        "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, travel_probability=EXCLUDED.travel_probability, notes=EXCLUDED.notes, aliases=EXCLUDED.aliases, updated_at=NOW()";
       await _mcpSql(sql);
       return;
     }
@@ -858,7 +864,7 @@ function _migrateStatus(s) {
   return s || 'renew';
 }
 
-function _mapChannel(c) { return { name: c.name, type: chNormType(c.type), parentCompany: c.parent_company || '', royaltyPotential: c.royalty_potential, proPayout: c.pro_payout, rerunProbability: c.rerun_probability, notes: c.notes || '', aliases: Array.isArray(c.aliases) ? c.aliases : [], updatedAt: c.updated_at || '' }; }
+function _mapChannel(c) { return { name: c.name, type: chNormType(c.type), parentCompany: c.parent_company || '', royaltyPotential: c.royalty_potential, proPayout: c.pro_payout, rerunProbability: c.rerun_probability, travelProbability: c.travel_probability || '', notes: c.notes || '', aliases: Array.isArray(c.aliases) ? c.aliases : [], updatedAt: c.updated_at || '' }; }
 function _mapAgreement(a) { return { entity: a.entity, entityType: a.entity_type, scope: a.scope, thirdPartySync: a.third_party_sync, renewalDate: a.renewal_date || '', status: a.status, salesforceUrl: a.salesforce_url || '', territories: a.territories || '', contentTypes: Array.isArray(a.content_types) ? a.content_types : [], notes: a.notes || '' }; }
 function _mapItem(r) {
   return {
@@ -940,15 +946,15 @@ async function chSaveRow(c) {
     localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(all));
   } catch {}
   if (IS_COWORK) {
-    const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, aliases, updated_at) VALUES (" +
-      _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parentCompany || '') + ", " + _sqlStr(c.royaltyPotential) + ", " + _sqlNum(c.proPayout) + ", " +
-      _sqlStr(c.rerunProbability) + ", " + _sqlStr(c.notes || '') + ", " + _sqlJson(c.aliases || []) + ", NOW()) " +
+    const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, travel_probability, notes, aliases, updated_at) VALUES (" +
+      _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parentCompany || '') + ", " + _sqlStr(c.royaltyPotential || null) + ", " + _sqlNum(c.proPayout) + ", " +
+      _sqlStr(c.rerunProbability || null) + ", " + _sqlStr(c.travelProbability || null) + ", " + _sqlStr(c.notes || '') + ", " + _sqlJson(c.aliases || []) + ", NOW()) " +
       "ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, parent_company=EXCLUDED.parent_company, royalty_potential=EXCLUDED.royalty_potential, " +
-      "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, aliases=EXCLUDED.aliases, updated_at=NOW()";
+      "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, travel_probability=EXCLUDED.travel_probability, notes=EXCLUDED.notes, aliases=EXCLUDED.aliases, updated_at=NOW()";
     await _mcpSql(sql);
     return;
   }
-  await sbUpsert('/rest/v1/channels', [{ name: c.name, type: c.type, parent_company: c.parentCompany || '', royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', aliases: c.aliases || [], updated_at: new Date().toISOString() }]);
+  await sbUpsert('/rest/v1/channels', [{ name: c.name, type: c.type, parent_company: c.parentCompany || '', royalty_potential: c.royaltyPotential || null, pro_payout: c.proPayout, rerun_probability: c.rerunProbability || null, travel_probability: c.travelProbability || null, notes: c.notes || '', aliases: c.aliases || [], updated_at: new Date().toISOString() }]);
 }
 async function chDeleteRow(name) {
   try {
@@ -991,16 +997,16 @@ async function agDeleteRow(entity) {
 
 async function chSave(arr) {
   try { localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(arr)); } catch {}
-  const rows = arr.map(c => ({ name: c.name, type: c.type, parent_company: c.parentCompany || '', royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', aliases: c.aliases || [], updated_at: new Date().toISOString() }));
+  const rows = arr.map(c => ({ name: c.name, type: c.type, parent_company: c.parentCompany || '', royalty_potential: c.royaltyPotential || null, pro_payout: c.proPayout, rerun_probability: c.rerunProbability || null, travel_probability: c.travelProbability || null, notes: c.notes || '', aliases: c.aliases || [], updated_at: new Date().toISOString() }));
   if (IS_COWORK) {
     if (!rows.length) return;
     const tuples = rows.map(c => "(" +
-      _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parent_company || '') + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
-      _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", " + _sqlJson(c.aliases || []) + ", NOW())").join(", ");
+      _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parent_company || '') + ", " + _sqlStr(c.royalty_potential || null) + ", " + _sqlNum(c.pro_payout) + ", " +
+      _sqlStr(c.rerun_probability || null) + ", " + _sqlStr(c.travel_probability || null) + ", " + _sqlStr(c.notes || '') + ", " + _sqlJson(c.aliases || []) + ", NOW())").join(", ");
     const nameList = rows.map(c => _sqlStr(c.name)).join(", ");
-    const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, aliases, updated_at) VALUES " + tuples +
+    const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, travel_probability, notes, aliases, updated_at) VALUES " + tuples +
       " ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, parent_company=EXCLUDED.parent_company, royalty_potential=EXCLUDED.royalty_potential, " +
-      "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, aliases=EXCLUDED.aliases, updated_at=NOW(); " +
+      "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, travel_probability=EXCLUDED.travel_probability, notes=EXCLUDED.notes, aliases=EXCLUDED.aliases, updated_at=NOW(); " +
       "DELETE FROM channels WHERE name NOT IN (" + nameList + ")";
     await _mcpSql(sql);
     return;
@@ -1274,11 +1280,12 @@ function computeRoyaltyPotential(it) {
   const ch = lookupChannel(it.network);
   if (ch) {
     it._royaltySource = "db";
-    const p = parseInt(ch.proPayout);
+    const p = parseFloat(ch.proPayout);
     it._proPayout = isNaN(p) ? 0 : Math.max(0, p);
-    // Use the channel's stored classification (auto-set from the rate, but manually overridable);
-    // fall back to deriving from the rate if it's somehow missing.
-    return ch.royaltyPotential || classifyRoyalty(it._proPayout);
+    // Royalty Potential is set manually per channel and drives the Slate priority directly.
+    // Normalize any legacy "Zero" to the 5-level scheme.
+    const rp = ch.royaltyPotential === "Zero" ? "Very Low" : ch.royaltyPotential;
+    return rp || "Low";
   }
   it._royaltySource = "heuristic"; it._proPayout = null;
   const net = (it.network || "");
@@ -1310,17 +1317,16 @@ function computeCovered(it) {
 }
 // Royalty classification → score. For now the score is driven ONLY by royalty potential
 // (status, rerun, coverage and music are tracked but do NOT affect the score).
-const ROYALTY_POINTS = { "Very High": 100, "High": 100, "Medium": 60, "Low": 30, "Very Low": 15, "Zero": 0 };
+const ROYALTY_POINTS = { "Very High": 100, "High": 80, "Medium": 60, "Low": 40, "Very Low": 20, "Zero": 20 };
 function computePriority(it) {
   return (it._royalty in ROYALTY_POINTS) ? ROYALTY_POINTS[it._royalty] : 60;
 }
-// Priority tier maps directly from the royalty classification:
-//   Very High / High → high · Medium → med · Low / Very Low / Zero → low
+// Priority mirrors the channel's Royalty Potential 1:1 (5 levels).
 function tierFromRoyalty(label) {
-  if (label === "Very High" || label === "High") return "high";
-  if (label === "Medium") return "med";
-  return "low"; // Low, Very Low, Zero (and any heuristic "Low")
+  const norm = label === "Zero" ? "Very Low" : label;
+  return ["Very High","High","Medium","Low","Very Low"].includes(norm) ? norm : "Low";
 }
+function prioSlug(label) { return String(label || "").toLowerCase().replace(/[^a-z]/g, ""); }
 function priorityTier(score) { if (score >= 70) return "high"; if (score >= 50) return "med"; return "low"; }
 function recomputeAllSignals() {
   items.forEach(it => {
@@ -1723,7 +1729,7 @@ function render() {
   const yes = items.filter(i => i._covered === "Yes").length;
   const no  = items.filter(i => i._covered === "No").length;
   stats.textContent = visible.length + " of " + items.length + " shown · " +
-    (tierCounts.high||0) + " high-priority · " + (tierCounts.med||0) + " medium · " + (tierCounts.low||0) + " low · " +
+    (tierCounts["Very High"]||0) + " very high · " + (tierCounts["High"]||0) + " high · " + (tierCounts["Medium"]||0) + " medium · " + (tierCounts["Low"]||0) + " low · " + (tierCounts["Very Low"]||0) + " very low · " +
     yes + " covered, " + no + " not covered · " +
     (counts.renew||0) + " renewed · " + (counts.prepro||0) + " pre-prod · " + (counts.postpro||0) + " post-prod";
   if (!visible.length) { list.innerHTML = '<div class="empty">No shows match these filters.</div>'; return; }
@@ -1762,7 +1768,7 @@ function render() {
         ${prodStatus ? `<span class="badge prod-badge b-${prodStatus}">${esc(PROD_LABEL[prodStatus])}</span>` : ''}
         ${showMarket ? `<span class="badge market-badge b-${it.status}">${esc(STATUS_LABEL[it.status])}</span>` : ''}
         ${it.statusLabel && it.statusLabel !== (STATUS_LABEL[it.status] || it.status) && it.statusLabel !== (PROD_LABEL[prodStatus] || '') ? `<span class="status-sub">${esc(it.statusLabel)}</span>` : ''}
-        <span class="priority p-${it._tier}">${it._tier.toUpperCase()} <span class="score">· ${it._priority}</span></span>
+        <span class="priority p-${prioSlug(it._tier)}">${String(it._tier).toUpperCase()} <span class="score">· ${it._priority}</span></span>
       </div>
       <div class="entry-main">
         <div class="title">${esc(it.title)}</div>
@@ -2226,9 +2232,9 @@ const CH_TYPES = [
   { value: "streaming-premium", label: "Streaming - Premium" },
   { value: "streaming-fast",    label: "Streaming - FAST" }
 ];
-const CH_LEVELS = ["High", "Medium", "Low"]; // rerun probability levels
-// 6-tier royalty classification, auto-derived from the Average Royalty Rate.
-const CH_ROYALTY_LEVELS = ["Very High", "High", "Medium", "Low", "Very Low", "Zero"];
+const CH_LEVELS = ["High", "Medium", "Low"]; // rerun / travel probability levels
+// 5-level royalty classification, set manually per channel; mirrors the Slate priority levels.
+const CH_ROYALTY_LEVELS = ["Very High", "High", "Medium", "Low", "Very Low"];
 function classifyRoyalty(rate) {
   const r = parseInt(rate);
   if (isNaN(r) || r <= 0) return "Zero";
@@ -2258,14 +2264,15 @@ function chRowHtml(c) {
       <td><input type="text" data-field="name" value="${esc(c.name)}" style="font-weight:600;"></td>
       <td><select data-field="type">${CH_TYPES.map(t => `<option value="${t.value}"${t.value===typeVal?' selected':''}>${esc(t.label)}</option>`).join("")}</select></td>
       <td><input type="text" data-field="parentCompany" value="${esc(c.parentCompany||'')}" placeholder="e.g. Warner Bros. Discovery"></td>
-      <td><input type="number" min="0" step="1" data-field="proPayout" value="${c.proPayout||0}" title="Average royalty rate — auto-sets Royalty Potential" style="width:90px;"></td>
-      <td><select data-field="royaltyPotential" class="pot-sel ${potClass(c.royaltyPotential || classifyRoyalty(c.proPayout))}" title="Auto-set from the Average Royalty Rate — change manually to override">${CH_ROYALTY_LEVELS.map(l => `<option value="${l}"${l===(c.royaltyPotential || classifyRoyalty(c.proPayout))?' selected':''}>${l}</option>`).join("")}</select></td>
-      <td><select data-field="rerunProbability" class="prob-${esc(c.rerunProbability)}">${CH_LEVELS.map(l => `<option value="${l}"${l===c.rerunProbability?' selected':''}>${l}</option>`).join("")}</select></td>
+      <td><input type="number" min="0" step="0.01" data-field="proPayout" value="${c.proPayout||0}" title="Average royalty rate per minute (decimals allowed)" style="width:90px;"></td>
+      <td><select data-field="rerunProbability" class="prob-${esc(c.rerunProbability)}"><option value=""${!c.rerunProbability?' selected':''}>—</option>${CH_LEVELS.map(l => `<option value="${l}"${l===c.rerunProbability?' selected':''}>${l}</option>`).join("")}</select></td>
+      <td><select data-field="travelProbability" class="prob-${esc(c.travelProbability||'')}" title="Likelihood the show travels to EX-US markets (EX-US PRO royalties)"><option value=""${!c.travelProbability?' selected':''}>—</option>${CH_LEVELS.map(l => `<option value="${l}"${l===c.travelProbability?' selected':''}>${l}</option>`).join("")}</select></td>
+      <td><select data-field="royaltyPotential" class="pot-sel ${potClass(c.royaltyPotential)}" title="Drives the Slate priority level for shows on this channel">${CH_ROYALTY_LEVELS.map(l => `<option value="${l}"${l===c.royaltyPotential?' selected':''}>${l}</option>`).join("")}</select></td>
       <td style="text-align:center;"><span class="expand-btn ${open?'open':''}" data-action="ch-expand" data-idx="${realIdx}" title="Expand for detailed notes">${open?'▼':'▶'}</span></td>
       <td style="text-align:center;"><span class="icon-btn" data-action="ch-delete" data-idx="${realIdx}" title="Delete row">✕</span></td>
     </tr>
     <tr class="expand-row" data-idx="${realIdx}" style="display:${open?'table-row':'none'};">
-      <td colspan="8">
+      <td colspan="9">
         <div class="expand-form">
           <div class="field">
             <label>Alternative names / aliases for ${esc(c.name)} <span style="font-weight:400;color:var(--muted);">— comma-separated; used to auto-link slate entries whose network is written differently (e.g. "Max, HBOMax")</span></label>
@@ -2298,7 +2305,7 @@ function renderChannels() {
     });
     tbody.innerHTML = keys.map(k => {
       const rows = groups[k].slice().sort((a,b) => (a.name||"").localeCompare(b.name||""));
-      return `<tr class="group-header"><td colspan="8" style="background:var(--panel,#f4f4f5); font-weight:700; padding:8px 10px;">${esc(k)} <span style="font-weight:400; color:var(--muted);">· ${rows.length}</span></td></tr>` + rows.map(chRowHtml).join("");
+      return `<tr class="group-header"><td colspan="9" style="background:var(--panel,#f4f4f5); font-weight:700; padding:8px 10px;">${esc(k)} <span style="font-weight:400; color:var(--muted);">· ${rows.length}</span></td></tr>` + rows.map(chRowHtml).join("");
     }).join("");
   } else {
     tbody.innerHTML = visible.map(chRowHtml).join("");
@@ -2324,20 +2331,13 @@ function renderChannels() {
         updateBannerCounts();
         return;
       }
-      if (field === "proPayout") val = Math.max(0, parseInt(val) || 0);
+      if (field === "proPayout") val = Math.max(0, parseFloat(val) || 0);
       let _renamedFrom = null;
       if (field === "name") { const oldName = channels[idx].name; if (oldName && oldName !== val) _renamedFrom = oldName; }
       channels[idx][field] = val;
-      if (field === "proPayout") {
-        // Average Royalty Rate auto-sets the Royalty Potential classification (manually overridable).
-        const cls = classifyRoyalty(val);
-        channels[idx].royaltyPotential = cls;
-        const tr2 = e.target.closest("tr");
-        const sel = tr2 && tr2.querySelector('select[data-field="royaltyPotential"]');
-        if (sel) { sel.value = cls; sel.className = "pot-sel " + potClass(cls); }
-      }
+      // Royalty Potential is now set manually (decoupled from the Average Royalty Rate).
       if (field === "royaltyPotential") e.target.className = "pot-sel " + potClass(val);
-      if (field === "rerunProbability") e.target.className = "prob-" + val;
+      if (field === "rerunProbability" || field === "travelProbability") e.target.className = "prob-" + val;
       suppressRealtime(8000);
       if (_renamedFrom) chDeleteRow(_renamedFrom);
       chSaveRow(channels[idx]); chUpdateStats();
@@ -2382,16 +2382,16 @@ function renderChannels() {
 }
 function chUpdateStats() {
   const total = channels.length;
-  const cnt = lbl => channels.filter(c => (c.royaltyPotential || classifyRoyalty(c.proPayout)) === lbl).length;
-  const vh = cnt("Very High"), pH = cnt("High"), pM = cnt("Medium"), pL = cnt("Low"), vl = cnt("Very Low"), pz = cnt("Zero");
-  const avg = total ? Math.round(channels.reduce((s,c) => s + (parseInt(c.proPayout)||0), 0) / total) : 0;
-  const summary = `${total} channels · Royalty VeryHigh ${vh} / High ${pH} / Med ${pM} / Low ${pL} / VeryLow ${vl} / Zero ${pz} · Avg rate ${avg}`;
+  const cnt = lbl => channels.filter(c => c.royaltyPotential === lbl).length;
+  const vh = cnt("Very High"), pH = cnt("High"), pM = cnt("Medium"), pL = cnt("Low"), vl = cnt("Very Low");
+  const avg = total ? (channels.reduce((s,c) => s + (parseFloat(c.proPayout)||0), 0) / total).toFixed(1) : 0;
+  const summary = `${total} channels · Royalty VeryHigh ${vh} / High ${pH} / Med ${pM} / Low ${pL} / VeryLow ${vl} · Avg rate ${avg}`;
   const s = document.getElementById("ch-stats"); if (s) s.textContent = summary;
 }
 document.getElementById("ch-addRow").addEventListener("click", () => {
   let base = "New channel", nm = base, n = 2;
   while (channels.some(c => c.name === nm)) { nm = base + " " + n; n++; }
-  const newRow = { name: nm, type: "broadcast", parentCompany: "", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "", aliases: [], updatedAt: new Date().toISOString() };
+  const newRow = { name: nm, type: "broadcast", parentCompany: "", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", travelProbability: "", notes: "", aliases: [], updatedAt: new Date().toISOString() };
   channels.unshift(newRow);
   suppressRealtime(8000); chSaveRow(newRow);
   // Surface the new row where the user can see it: newest-first, then focus its name field.
@@ -2404,9 +2404,9 @@ document.getElementById("ch-addRow").addEventListener("click", () => {
 document.getElementById("ch-sort").addEventListener("change", e => { chSort = e.target.value; renderChannels(); });
 document.getElementById("ch-q").addEventListener("input", e => { chSearch = e.target.value; renderChannels(); });
 document.getElementById("ch-exportCsv").addEventListener("click", () => {
-  const headers = ["Channel","Type","Parent Company","Royalty Potential","Payout","Rerun Probability","Detailed Notes"];
+  const headers = ["Channel","Type","Parent Company","Avg Royalty Rate","Rerun Probability","Travel Probability","Royalty Potential","Detailed Notes"];
   const lines = [headers.map(csvCell).join(",")];
-  channels.forEach(c => lines.push([c.name, chTypeLabel(c.type), c.parentCompany||"", c.royaltyPotential, c.proPayout, c.rerunProbability, c.notes].map(csvCell).join(",")));
+  channels.forEach(c => lines.push([c.name, chTypeLabel(c.type), c.parentCompany||"", c.proPayout, c.rerunProbability||"", c.travelProbability||"", c.royaltyPotential, c.notes].map(csvCell).join(",")));
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
