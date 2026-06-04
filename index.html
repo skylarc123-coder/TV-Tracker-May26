@@ -744,10 +744,10 @@ async function sbUpsert(path, body) {
     if (path === '/rest/v1/channels') {
       const tuples = body.map(c => "(" +
         _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parent_company || '') + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
-        _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", NOW())").join(", ");
-      const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES " + tuples +
+        _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", " + _sqlJson(c.aliases || []) + ", NOW())").join(", ");
+      const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, aliases, updated_at) VALUES " + tuples +
         " ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, parent_company=EXCLUDED.parent_company, royalty_potential=EXCLUDED.royalty_potential, " +
-        "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, updated_at=NOW()";
+        "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, aliases=EXCLUDED.aliases, updated_at=NOW()";
       await _mcpSql(sql);
       return;
     }
@@ -826,7 +826,7 @@ function _migrateStatus(s) {
   return s || 'renew';
 }
 
-function _mapChannel(c) { return { name: c.name, type: chNormType(c.type), parentCompany: c.parent_company || '', royaltyPotential: c.royalty_potential, proPayout: c.pro_payout, rerunProbability: c.rerun_probability, notes: c.notes || '', updatedAt: c.updated_at || '' }; }
+function _mapChannel(c) { return { name: c.name, type: chNormType(c.type), parentCompany: c.parent_company || '', royaltyPotential: c.royalty_potential, proPayout: c.pro_payout, rerunProbability: c.rerun_probability, notes: c.notes || '', aliases: Array.isArray(c.aliases) ? c.aliases : [], updatedAt: c.updated_at || '' }; }
 function _mapAgreement(a) { return { entity: a.entity, entityType: a.entity_type, scope: a.scope, thirdPartySync: a.third_party_sync, renewalDate: a.renewal_date || '', status: a.status, salesforceUrl: a.salesforce_url || '', territories: a.territories || '', contentTypes: Array.isArray(a.content_types) ? a.content_types : [], notes: a.notes || '' }; }
 function _mapItem(r) {
   return {
@@ -908,15 +908,15 @@ async function chSaveRow(c) {
     localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(all));
   } catch {}
   if (IS_COWORK) {
-    const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES (" +
+    const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, aliases, updated_at) VALUES (" +
       _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parentCompany || '') + ", " + _sqlStr(c.royaltyPotential) + ", " + _sqlNum(c.proPayout) + ", " +
-      _sqlStr(c.rerunProbability) + ", " + _sqlStr(c.notes || '') + ", NOW()) " +
+      _sqlStr(c.rerunProbability) + ", " + _sqlStr(c.notes || '') + ", " + _sqlJson(c.aliases || []) + ", NOW()) " +
       "ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, parent_company=EXCLUDED.parent_company, royalty_potential=EXCLUDED.royalty_potential, " +
-      "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, updated_at=NOW()";
+      "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, aliases=EXCLUDED.aliases, updated_at=NOW()";
     await _mcpSql(sql);
     return;
   }
-  await sbUpsert('/rest/v1/channels', [{ name: c.name, type: c.type, parent_company: c.parentCompany || '', royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }]);
+  await sbUpsert('/rest/v1/channels', [{ name: c.name, type: c.type, parent_company: c.parentCompany || '', royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', aliases: c.aliases || [], updated_at: new Date().toISOString() }]);
 }
 async function chDeleteRow(name) {
   try {
@@ -959,16 +959,16 @@ async function agDeleteRow(entity) {
 
 async function chSave(arr) {
   try { localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(arr)); } catch {}
-  const rows = arr.map(c => ({ name: c.name, type: c.type, parent_company: c.parentCompany || '', royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', updated_at: new Date().toISOString() }));
+  const rows = arr.map(c => ({ name: c.name, type: c.type, parent_company: c.parentCompany || '', royalty_potential: c.royaltyPotential, pro_payout: c.proPayout, rerun_probability: c.rerunProbability, notes: c.notes || '', aliases: c.aliases || [], updated_at: new Date().toISOString() }));
   if (IS_COWORK) {
     if (!rows.length) return;
     const tuples = rows.map(c => "(" +
       _sqlStr(c.name) + ", " + _sqlStr(c.type) + ", " + _sqlStr(c.parent_company || '') + ", " + _sqlStr(c.royalty_potential) + ", " + _sqlNum(c.pro_payout) + ", " +
-      _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", NOW())").join(", ");
+      _sqlStr(c.rerun_probability) + ", " + _sqlStr(c.notes || '') + ", " + _sqlJson(c.aliases || []) + ", NOW())").join(", ");
     const nameList = rows.map(c => _sqlStr(c.name)).join(", ");
-    const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, updated_at) VALUES " + tuples +
+    const sql = "INSERT INTO channels (name, type, parent_company, royalty_potential, pro_payout, rerun_probability, notes, aliases, updated_at) VALUES " + tuples +
       " ON CONFLICT (name) DO UPDATE SET type=EXCLUDED.type, parent_company=EXCLUDED.parent_company, royalty_potential=EXCLUDED.royalty_potential, " +
-      "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, updated_at=NOW(); " +
+      "pro_payout=EXCLUDED.pro_payout, rerun_probability=EXCLUDED.rerun_probability, notes=EXCLUDED.notes, aliases=EXCLUDED.aliases, updated_at=NOW(); " +
       "DELETE FROM channels WHERE name NOT IN (" + nameList + ")";
     await _mcpSql(sql);
     return;
@@ -1203,12 +1203,23 @@ const order = { renew: 0, pickup: 1, indev: 2, prepro: 3, postpro: 4, cancel: 5,
 // === Backend signal lookups ========================================================
 function _channelsDB() { try { return JSON.parse(localStorage.getItem("slate-channels-v1") || "[]"); } catch(e) { return []; } }
 function _agreementsDB() { try { return JSON.parse(localStorage.getItem("slate-agreements-v1") || "[]"); } catch(e) { return []; } }
+function _chAliases(c) { return Array.isArray(c.aliases) ? c.aliases : []; }
 function lookupChannel(networkStr) {
-  const net = (networkStr || "").toLowerCase(); if (!net) return null;
-  let best = null;
-  for (const c of _channelsDB()) {
-    const cn = (c.name || "").toLowerCase(); if (!cn) continue;
-    if (net.includes(cn) || cn.includes(net)) { if (!best || cn.length > (best.name||"").length) best = c; }
+  const net = (networkStr || "").toLowerCase().trim(); if (!net) return null;
+  const db = _channelsDB();
+  // 1) Exact channel-name match wins outright.
+  for (const c of db) { if ((c.name || "").toLowerCase().trim() === net) return c; }
+  // 2) Exact alias match wins over any fuzzy substring match.
+  for (const c of db) { if (_chAliases(c).some(a => (a || "").toLowerCase().trim() === net)) return c; }
+  // 3) Fuzzy substring fallback (longest matching string wins), checking name + aliases.
+  let best = null, bestLen = -1;
+  for (const c of db) {
+    const cn = (c.name || "").toLowerCase();
+    if (cn && (net.includes(cn) || cn.includes(net)) && cn.length > bestLen) { best = c; bestLen = cn.length; }
+    for (const a of _chAliases(c)) {
+      const an = (a || "").toLowerCase();
+      if (an && (net.includes(an) || an.includes(net)) && an.length > bestLen) { best = c; bestLen = an.length; }
+    }
   }
   return best;
 }
@@ -2206,6 +2217,10 @@ function chRowHtml(c) {
       <td colspan="8">
         <div class="expand-form">
           <div class="field">
+            <label>Alternative names / aliases for ${esc(c.name)} <span style="font-weight:400;color:var(--muted);">— comma-separated; used to auto-link slate entries whose network is written differently (e.g. "Max, HBOMax")</span></label>
+            <input type="text" data-field="aliasesCsv" value="${esc((c.aliases||[]).join(', '))}" placeholder="e.g. Max, HBOMax, HBO/Max">
+          </div>
+          <div class="field">
             <label>Detailed notes for ${esc(c.name)}</label>
             <textarea data-field="notes" placeholder="Add detailed notes — PRO breakdown specifics, syndication patterns, rerun deal terms, key contacts, recent quarter trends, anything the team should know about this channel…">${esc(c.notes)}</textarea>
           </div>
@@ -2249,6 +2264,15 @@ function renderChannels() {
       const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
       const field = e.target.dataset.field; if (!field) return;
       let val = e.target.value;
+      if (field === "aliasesCsv") {
+        channels[idx].aliases = val.split(",").map(s => s.trim()).filter(Boolean);
+        suppressRealtime(8000); chSaveRow(channels[idx]);
+        recomputeAllSignals();
+        const sb0 = document.getElementById("sortBy"); if (sb0) sortItems(sb0.value);
+        if (typeof render === "function") render();
+        updateBannerCounts();
+        return;
+      }
       if (field === "proPayout") val = Math.max(0, Math.min(100, parseInt(val) || 0));
       let _renamedFrom = null;
       if (field === "name") { const oldName = channels[idx].name; if (oldName && oldName !== val) _renamedFrom = oldName; }
@@ -2312,7 +2336,7 @@ function chUpdateStats() {
 document.getElementById("ch-addRow").addEventListener("click", () => {
   let base = "New channel", nm = base, n = 2;
   while (channels.some(c => c.name === nm)) { nm = base + " " + n; n++; }
-  const newRow = { name: nm, type: "broadcast", parentCompany: "", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "", updatedAt: new Date().toISOString() };
+  const newRow = { name: nm, type: "broadcast", parentCompany: "", royaltyPotential: "Medium", proPayout: 50, rerunProbability: "Medium", notes: "", aliases: [], updatedAt: new Date().toISOString() };
   channels.unshift(newRow);
   suppressRealtime(8000); chSaveRow(newRow);
   // Surface the new row where the user can see it: newest-first, then focus its name field.
