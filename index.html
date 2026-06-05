@@ -65,6 +65,7 @@
   .net-tag.streaming { background: #e6f3eb; color: var(--streaming); }
   .net-tag.scripted { background: #efe6f7; color: #5e2f87; }
   .net-tag.unscripted { background: #fde7e0; color: #a3442a; }
+  .net-tag.subgenre { background: #e8f0e3; color: #3f6b2e; }
   .source-tag { display: inline-block; font-size: 10px; font-weight: 600;
     padding: 1px 6px; border-radius: 3px; margin-left: 6px;
     background: #fef3e6; color: #a05a00;
@@ -140,6 +141,19 @@
   .p-med  { background: #fff3d6; color: #876200; border-color: #e6c97a; }
   .p-low  { background: #eef4ef; color: #4a6e58; border-color: #c6dccf; }
   .p-verylow  { background: #e6efe9; color: #3a6650; border-color: #b7d4c2; }
+  .ai-panel { margin: 8px 0; padding: 8px 10px; border: 1px solid #cfd8e3; border-radius: 8px; font-size: 12px; background: #f6f8fb; }
+  .ai-pending { color: #777; font-style: italic; }
+  .ai-head { font-weight: 700; margin-bottom: 4px; }
+  .ai-notes { color: #666; margin-bottom: 6px; }
+  .ai-change { margin: 2px 0; }
+  .ai-old { text-decoration: line-through; opacity: .6; }
+  .ai-new { font-weight: 600; color: #1d6b3a; }
+  .ai-srcs { margin-top: 6px; }
+  .ai-srcs a { margin-right: 10px; }
+  .ai-actions { margin-top: 8px; display: flex; gap: 8px; }
+  .ai-sel { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #555; cursor: pointer; margin-right: 4px; }
+  .ai-sel input { cursor: pointer; }
+  #aiRefreshSelected:disabled { opacity: .5; cursor: default; }
 
   .signals { display: flex; flex-wrap: wrap; gap: 8px;
     margin-top: 6px; font-size: 11.5px; color: var(--muted);
@@ -495,6 +509,19 @@
           <button type="button" class="ms-clear">Clear all</button>
         </div>
       </div>
+      <div class="ms-filter" data-filter="subgenre">
+        <button class="ms-btn" type="button">Subgenre: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
+        <div class="ms-menu">
+          <label><input type="checkbox" value="Talk Show/Variety"> Talk Show/Variety</label>
+          <label><input type="checkbox" value="Drama (scripted)"> Drama (scripted)</label>
+          <label><input type="checkbox" value="Comedy (scripted)"> Comedy (scripted)</label>
+          <label><input type="checkbox" value="Game Show"> Game Show</label>
+          <label><input type="checkbox" value="Reality"> Reality</label>
+          <label><input type="checkbox" value="Competition"> Competition</label>
+          <label><input type="checkbox" value="Documentary"> Documentary</label>
+          <button type="button" class="ms-clear">Clear all</button>
+        </div>
+      </div>
       <div class="ms-filter" data-filter="source">
         <button class="ms-btn" type="button">Source: <span class="ms-count">All</span> <span aria-hidden="true">▾</span></button>
         <div class="ms-menu">
@@ -533,6 +560,7 @@
       <button class="btn-export" id="addShow" style="margin-left:auto; background:var(--text); color:#fff; border-color:var(--text);">+ Add show</button>
       <button class="btn-export" id="manualSync" title="Pull the latest team edits from Supabase">↻ Sync</button>
       <button class="btn-export" id="exportCsv">⤓ Export CSV</button>
+      <button class="btn-export" id="aiRefreshSelected" style="display:none;" title="Queue all selected entries for AI research in one go">⟳ AI Refresh selected (<span id="aiSelCount">0</span>)</button>
     </div>
     <div class="stats" id="stats"></div>
     <div id="list"></div>
@@ -893,6 +921,7 @@ function _mapItem(r) {
     network: r.network || '',
     type: r.type || 'streaming',
     genre: r.genre || 'scripted',
+    subgenre: r.subgenre || '',
     studio: r.studio || '',
     status: _migrateStatus(r.status),
     statusLabel: r.status_label || '',
@@ -908,14 +937,14 @@ function _itemId(it) { return (it.title || '').toLowerCase().trim() + '|' + (it.
 async function slSaveItem(it) {
   const id = _itemId(it);
   if (IS_COWORK) {
-    const sql = "INSERT INTO slate_items (id, source, title, network, type, genre, studio, status, status_label, detail, prod, air_date, sources, date_added, updated_at) VALUES (" +
+    const sql = "INSERT INTO slate_items (id, source, title, network, type, genre, subgenre, studio, status, status_label, detail, prod, air_date, sources, date_added, updated_at) VALUES (" +
       _sqlStr(id) + ", " + _sqlStr(it.source || 'trade') + ", " + _sqlStr(it.title || '') + ", " +
-      _sqlStr(it.network || '') + ", " + _sqlStr(it.type || 'streaming') + ", " + _sqlStr(it.genre || 'scripted') + ", " +
+      _sqlStr(it.network || '') + ", " + _sqlStr(it.type || 'streaming') + ", " + _sqlStr(it.genre || 'scripted') + ", " + _sqlStr(it.subgenre || '') + ", " +
       _sqlStr(it.studio || '') + ", " + _sqlStr(it.status || 'renew') + ", " + _sqlStr(it.statusLabel || '') + ", " +
       _sqlStr(it.detail || '') + ", " + _sqlStr(it.prod || '') + ", " + _sqlStr(it.airDate || '') + ", " + _sqlJson(it.sources || []) + ", " +
       _sqlStr(it.dateAdded || '') + ", NOW()) " +
       "ON CONFLICT (id) DO UPDATE SET source=EXCLUDED.source, title=EXCLUDED.title, network=EXCLUDED.network, " +
-      "type=EXCLUDED.type, genre=EXCLUDED.genre, studio=EXCLUDED.studio, status=EXCLUDED.status, " +
+      "type=EXCLUDED.type, genre=EXCLUDED.genre, subgenre=EXCLUDED.subgenre, studio=EXCLUDED.studio, status=EXCLUDED.status, " +
       "status_label=EXCLUDED.status_label, detail=EXCLUDED.detail, prod=EXCLUDED.prod, air_date=EXCLUDED.air_date, " +
       "sources=EXCLUDED.sources, date_added=EXCLUDED.date_added, updated_at=NOW()";
     await _mcpSql(sql);
@@ -923,7 +952,7 @@ async function slSaveItem(it) {
   }
   const body = [{
     id: id, source: it.source || 'trade', title: it.title || '', network: it.network || '',
-    type: it.type || 'streaming', genre: it.genre || 'scripted', studio: it.studio || '',
+    type: it.type || 'streaming', genre: it.genre || 'scripted', subgenre: it.subgenre || '', studio: it.studio || '',
     status: it.status || 'renew', status_label: it.statusLabel || '',
     detail: it.detail || '', prod: it.prod || '', air_date: it.airDate || '', sources: it.sources || [],
     date_added: it.dateAdded || '', updated_at: new Date().toISOString()
@@ -1624,6 +1653,110 @@ function saveOpp(it, num, url) {
   suppressRealtime(); saveState(state);
 }
 function getSeason(it) { return (state.season && state.season[it._origKey || itemKey(it)]) || ""; }
+// === Per-entry AI Refresh (Cowork artifact only) ==================================
+// Click -> queue a request row in Supabase -> trigger the manual scheduled task
+// "tv-tracker-ai-refresh", which researches the show online and writes a proposal
+// (with verified sources) back to the refresh_requests table. The proposal renders
+// on the card with Apply / Dismiss buttons; nothing changes until approved.
+const AI_REFRESH_TASK_ID = 'tv-tracker-ai-refresh';
+let aiRequests = [];
+function _aiNorm(r) {
+  try { if (typeof r.proposal === 'string') r.proposal = JSON.parse(r.proposal); } catch (e) { r.proposal = {}; }
+  try { if (typeof r.sources === 'string') r.sources = JSON.parse(r.sources); } catch (e) { r.sources = []; }
+  return r;
+}
+async function aiLoadRequests() {
+  if (!IS_COWORK) return;
+  try {
+    const rows = await _mcpSql("SELECT * FROM refresh_requests WHERE status IN ('pending','proposed') ORDER BY created_at DESC");
+    aiRequests = Array.isArray(rows) ? rows.map(_aiNorm) : [];
+  } catch (e) {}
+}
+function _aiItemId(it) { return it._origKey || itemKey(it); }
+function aiReqFor(it) { const id = _aiItemId(it); return aiRequests.find(r => r.item_id === id); }
+const aiSelected = new Set();
+function _aiPayload(it) {
+  return { title: it.title || '', network: it.network || '', studio: it.studio || '', status: it.status || '', status_label: it.statusLabel || '', prod: it.prod || '', season: getSeason(it) || '', air_date: it.airDate || '', detail: it.detail || '' };
+}
+function aiUpdateSelCount() {
+  const el = document.getElementById('aiSelCount'); if (el) el.textContent = aiSelected.size;
+  const btn = document.getElementById('aiRefreshSelected'); if (btn) btn.disabled = aiSelected.size === 0;
+}
+async function _aiQueue(targets) {
+  const tuples = targets.map(it => "(" + _sqlStr(_aiItemId(it)) + ", " + _sqlStr(it.title || '') + ", 'pending', " + _sqlJson(_aiPayload(it)) + ")").join(", ");
+  await _mcpSql("INSERT INTO refresh_requests (item_id, title, status, request_payload) VALUES " + tuples);
+  let triggered = false;
+  try { if (window.cowork && typeof window.cowork.runScheduledTask === 'function') { window.cowork.runScheduledTask(AI_REFRESH_TASK_ID); triggered = true; } } catch (e) {}
+  await aiLoadRequests(); render(); aiUpdateSelCount();
+  if (!triggered) alert('Request(s) queued, but the research task could not be auto-started. Run "tv-tracker-ai-refresh" from the Scheduled section, or ask Claude to process refresh requests.');
+}
+async function aiRefreshSelected() {
+  if (!IS_COWORK) return;
+  if (!aiSelected.size) { alert('Tick the "Select" checkbox on the entries you want refreshed first.'); return; }
+  const targets = [];
+  aiSelected.forEach(k => { const it = items.find(i => _aiItemId(i) === k); if (it && !aiReqFor(it)) targets.push(it); });
+  if (!targets.length) { alert('All selected entries already have open AI Refresh requests.'); return; }
+  aiSelected.clear();
+  await _aiQueue(targets);
+}
+async function aiResolveRequest(reqId, newStatus) {
+  await _mcpSql("UPDATE refresh_requests SET status=" + _sqlStr(newStatus) + ", updated_at=NOW() WHERE id=" + _sqlStr(reqId));
+  await aiLoadRequests(); render();
+}
+async function aiApprove(reqId) {
+  const r = aiRequests.find(x => String(x.id) === String(reqId)); if (!r) return;
+  const it = items.find(i => _aiItemId(i) === r.item_id) || items.find(i => i.title === r.title);
+  if (!it) { alert('Could not find the slate entry for this proposal.'); return; }
+  const p = r.proposal || {};
+  if (p.network !== undefined) it.network = p.network;
+  if (p.studio !== undefined) it.studio = p.studio;
+  if (p.status !== undefined) it.status = p.status;
+  if (p.status_label !== undefined) it.statusLabel = p.status_label;
+  if (p.prod !== undefined) it.prod = p.prod;
+  if (p.air_date !== undefined) it.airDate = p.air_date;
+  if (p.detail !== undefined) it.detail = p.detail;
+  if (p.season !== undefined) saveSeason(it, p.season);
+  try {
+    (r.sources || []).forEach(src => {
+      if (src && src.url && !(it.sources || []).some(x => x && x[1] === src.url)) { it.sources = it.sources || []; it.sources.push([src.title || 'Source', src.url]); }
+    });
+  } catch (e) {}
+  try { await slSaveItem(it); } catch (e) {}
+  recomputeAllSignals();
+  await aiResolveRequest(reqId, 'applied');
+}
+function aiPanelHtml(it) {
+  if (!IS_COWORK) return '';
+  const rq = aiReqFor(it); if (!rq) return '';
+  if (rq.status === 'pending') return '<div class="ai-panel ai-pending">⟳ Claude is researching this entry… results will appear here when ready.</div>';
+  const p = rq.proposal || {}; const keys = Object.keys(p);
+  const cur = { network: it.network, studio: it.studio, status: it.status, status_label: it.statusLabel, prod: it.prod, season: getSeason(it), air_date: it.airDate, detail: it.detail };
+  const rows = keys.map(kk => '<div class="ai-change"><b>' + esc(kk) + '</b>: <span class="ai-old">' + esc(String(cur[kk] == null ? '' : cur[kk]) || '—') + '</span> → <span class="ai-new">' + esc(String(p[kk])) + '</span></div>').join('');
+  const srcs = (rq.sources || []).map(src => '<a href="' + esc(src.url) + '" target="_blank" rel="noopener">' + esc(src.title || 'Source') + ' ↗</a>').join(' ');
+  return '<div class="ai-panel ai-proposed"><div class="ai-head">AI Refresh proposal</div>' +
+    (rq.notes ? '<div class="ai-notes">' + esc(rq.notes) + '</div>' : '') +
+    (rows || '<div class="ai-change">No changes needed — entry looks up to date.</div>') +
+    (srcs ? '<div class="ai-srcs">' + srcs + '</div>' : '') +
+    '<div class="ai-actions">' + (keys.length ? '<button class="btn btn-primary" data-ai-approve="' + esc(String(rq.id)) + '">✓ Apply changes</button>' : '') +
+    '<button class="btn" data-ai-dismiss="' + esc(String(rq.id)) + '">Dismiss</button></div></div>';
+}
+if (IS_COWORK) {
+  document.addEventListener('click', e => {
+    const a = e.target.closest('[data-ai-approve]'); if (a) { aiApprove(a.getAttribute('data-ai-approve')); return; }
+    const d = e.target.closest('[data-ai-dismiss]'); if (d) { aiResolveRequest(d.getAttribute('data-ai-dismiss'), 'dismissed'); return; }
+  });
+  document.addEventListener('change', e => {
+    const cb = e.target.closest('input[data-ai-select]');
+    if (cb) { const k = cb.getAttribute('data-ai-select'); if (cb.checked) aiSelected.add(k); else aiSelected.delete(k); aiUpdateSelCount(); }
+  });
+  setTimeout(() => {
+    const btn = document.getElementById('aiRefreshSelected');
+    if (btn) { btn.style.display = ''; btn.addEventListener('click', aiRefreshSelected); aiUpdateSelCount(); }
+  }, 0);
+  setTimeout(() => { aiLoadRequests().then(() => { if (typeof render === 'function') render(); }); }, 1500);
+  setInterval(() => { if (aiRequests.some(r => r.status === 'pending')) aiLoadRequests().then(() => { if (typeof render === 'function') render(); }); }, 20000);
+}
+
 function saveSeason(it, value) {
   const k = itemKey(it);
   state.season = state.season || {};
@@ -1686,7 +1819,7 @@ const dateFromInput = document.getElementById("dateFrom");
 const dateToInput = document.getElementById("dateTo");
 // Multi-select filters use arrays (empty = no filter / all)
 const filters = {
-  status: [], production: [], type: [], genre: [], source: [], priority: [], license: [], royalty: [], rerunProb: [], channel: [], parentCompany: [], owner: [],
+  status: [], production: [], type: [], genre: [], subgenre: [], source: [], priority: [], license: [], royalty: [], rerunProb: [], channel: [], parentCompany: [], owner: [],
   dateRange: "all", selectedDate: null, dateFrom: null, dateTo: null, view: "all", contact: "all", q: ""
 };
 
@@ -1699,6 +1832,7 @@ const STATUS_OPTIONS = ["renew", "cancel", "pickup", "indev", "prepro", "inprod"
 const PROD_STATUSES = ["indev", "prepro", "inprod", "postpro", "aired"];
 const PROD_LABEL = { indev: "In Development", prepro: "Pre-production", inprod: "In Production", postpro: "Post-production", aired: "Aired" };
 const MARKET_STATUSES = ["renew", "cancel", "pickup"];
+const SUBGENRES = ["Talk Show/Variety", "Drama (scripted)", "Comedy (scripted)", "Game Show", "Reality", "Competition", "Documentary"];
 
 function render() {
   const term = filters.q.trim().toLowerCase();
@@ -1713,6 +1847,7 @@ function render() {
     if (filters.contact === "no" && isContacted(it)) return false;
     if (!inSet(filters.type, it.type)) return false;
     if (!inSet(filters.genre, it.genre)) return false;
+    if (!inSet(filters.subgenre, it.subgenre)) return false;
     if (!inSet(filters.source, it.source)) return false;
     if (filters.dateRange === "older" && it.dateAdded === LAST_REFRESHED) return false;
     if (filters.dateRange === "byDate" && filters.selectedDate && it.dateAdded !== filters.selectedDate) return false;
@@ -1796,6 +1931,7 @@ function render() {
           <span class="net">${esc(it.network)}</span>
           <span class="net-tag ${it.type}">${esc(it.type)}</span>
           ${it.genre ? `<span class="net-tag ${it.genre}">${esc(it.genre)}</span>` : ''}
+          ${it.subgenre ? `<span class="net-tag subgenre">${esc(it.subgenre)}</span>` : ''}
           ${it.source === "crew" ? '<span class="source-tag">crew</span>' : ''}
           · <span>${esc(it.studio)}</span>
           ${it.dateAdded ? `<span class="added-on">· added ${esc(it.dateAdded)}</span>` : ''}
@@ -1824,9 +1960,11 @@ function render() {
           </label>
           <span class="icon-btn fav ${fav ? 'on' : ''}" data-action="fav" data-key="${esc(k)}">${fav ? '★' : '☆'}</span>
           <span class="icon-btn edit" data-action="edit" data-key="${esc(k)}">✎ Edit</span>
+          ${IS_COWORK ? `<label class="ai-sel" title="Select for AI Refresh"><input type="checkbox" data-ai-select="${esc(k)}"${aiSelected.has(k) ? ' checked' : ''}> Select</label>` : ``}
           ${edited ? `<span class="icon-btn edit" data-action="revert" data-key="${esc(k)}">↻ Revert</span>` : ''}
           <span class="icon-btn archive ${archived ? 'on' : ''}" data-action="archive" data-key="${esc(k)}" title="${archived ? 'Restore this entry to the active slate' : 'Archive this entry (reversible — view under the Archived filter)'}">${archived ? '↩ Unarchive' : '✕ Archive'}</span>
         </div>
+        ${aiPanelHtml(it)}
         <div class="edit-form" data-form="${esc(k)}">
           <label>Title</label><input data-field="title" value="${esc(it.title)}">
           <label>Network</label><input data-field="network" value="${esc(it.network)}">
@@ -1840,6 +1978,8 @@ function render() {
           <select data-field="type">${["broadcast","cable","streaming"].map(t => `<option value="${t}"${t===it.type?' selected':''}>${t}</option>`).join("")}</select>
           <label>Genre</label>
           <select data-field="genre">${["scripted","unscripted"].map(g => `<option value="${g}"${g===it.genre?' selected':''}>${g}</option>`).join("")}</select>
+          <label>Subgenre</label>
+          <select data-field="subgenre"><option value=""${!it.subgenre?' selected':''}>— none —</option>${SUBGENRES.map(g => `<option value="${g}"${g===it.subgenre?' selected':''}>${g}</option>`).join("")}</select>
           <label>Source</label>
           <select data-field="source">${["trade","crew"].map(s => `<option value="${s}"${s===it.source?' selected':''}>${s}</option>`).join("")}</select>
           <label>Date Added</label><input type="date" data-field="dateAdded" value="${esc(it.dateAdded||'')}">
@@ -2111,6 +2251,7 @@ function exportCsv() {
     if (filters.contact === "no" && isContacted(it)) return false;
     if (!inSet(filters.type, it.type)) return false;
     if (!inSet(filters.genre, it.genre)) return false;
+    if (!inSet(filters.subgenre, it.subgenre)) return false;
     if (!inSet(filters.source, it.source)) return false;
     if (!inSet(filters.priority, it._tier)) return false;
     if (!inSet(filters.license, it._covered)) return false;
@@ -2119,9 +2260,9 @@ function exportCsv() {
     if (term && !(it.title + " " + it.network + " " + it.studio + " " + it.detail).toLowerCase().includes(term)) return false;
     return true;
   });
-  const headers = ["Title","Priority Tier","Priority Score","Royalty Potential","Rerun Probability","Covered Under License","Music Style","Status","Status Label","Owner","Network","Type","Genre","Studio","Source","Date Added","Detail","Production","User-added"];
+  const headers = ["Title","Priority Tier","Priority Score","Royalty Potential","Rerun Probability","Covered Under License","Music Style","Status","Status Label","Owner","Network","Type","Genre","Subgenre","Studio","Source","Date Added","Detail","Production","User-added"];
   const lines = [headers.map(csvCell).join(",")];
-  rows.forEach(it => lines.push([it.title, it._tier, it._priority, it._royalty, it._rerunProb, it._covered, it._musicStyle, it.status, it.statusLabel, getOwner(it), it.network, it.type, it.genre || "", it.studio, it.source, it.dateAdded || "", it.detail, it.prod || "", it._userAdded ? "yes" : ""].map(csvCell).join(",")));
+  rows.forEach(it => lines.push([it.title, it._tier, it._priority, it._royalty, it._rerunProb, it._covered, it._musicStyle, it.status, it.statusLabel, getOwner(it), it.network, it.type, it.genre || "", it.subgenre || "", it.studio, it.source, it.dateAdded || "", it.detail, it.prod || "", it._userAdded ? "yes" : ""].map(csvCell).join(",")));
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -2187,7 +2328,7 @@ document.getElementById("addShow").addEventListener("click", async () => {
   const today = new Date().toISOString().slice(0,10);
   let n = 1; let title = "New show";
   while (items.find(it => (it.title||"").toLowerCase() === title.toLowerCase())) { n += 1; title = "New show " + n; }
-  const newItem = { source: "trade", title, genre: "scripted", network: "", type: "streaming", studio: "", status: "indev", statusLabel: "In Development", detail: "", prod: "", sources: [], dateAdded: today };
+  const newItem = { source: "trade", title, genre: "scripted", subgenre: "", network: "", type: "streaming", studio: "", status: "indev", statusLabel: "In Development", detail: "", prod: "", sources: [], dateAdded: today };
   items.unshift(newItem); recomputeAllSignals();
   const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value); render();
   suppressRealtime(); await slSaveItem(newItem);
