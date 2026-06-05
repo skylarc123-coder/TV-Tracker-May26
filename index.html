@@ -782,7 +782,8 @@ async function _loadAllInOne() {
     "'channels', (SELECT json_agg(c.*) FROM (SELECT * FROM channels ORDER BY name) c), " +
     "'agreements', (SELECT json_agg(a.*) FROM (SELECT * FROM agreements ORDER BY entity) a), " +
     "'items', (SELECT json_agg(i.*) FROM (SELECT * FROM slate_items ORDER BY date_added DESC NULLS LAST, title) i), " +
-    "'state', (SELECT row_to_json(s.*) FROM slate_state s WHERE id = 'singleton')" +
+    "'state', (SELECT row_to_json(s.*) FROM slate_state s WHERE id = 'singleton'), " +
+    "'requests', (SELECT json_agg(r.*) FROM (SELECT * FROM refresh_requests WHERE status IN ('pending','proposed') ORDER BY created_at DESC) r)" +
   ") AS bundle";
   const rows = await _mcpSql(sql);
   if (!rows || !rows.length) return null;
@@ -1310,6 +1311,16 @@ function lookupChannel(networkStr) {
   }
   return best;
 }
+// Delivery method pulls from the channel DB when the network matches a channel;
+// falls back to the entry's own stored type otherwise.
+function effectiveType(it) {
+  const ch = lookupChannel(it.network);
+  if (ch && ch.type) {
+    const t = chNormType(ch.type);
+    return t.startsWith("streaming") ? "streaming" : t;
+  }
+  return it.type;
+}
 function lookupAgreement(studioStr) {
   const s = (studioStr || "").toLowerCase(); if (!s) return null;
   const rank = { Yes: 2, No: 1 }; let best = null;
@@ -1350,7 +1361,8 @@ function computeRerunProbability(it) {
   it._rerunSource = "heuristic";
   if (RERUN_HEAVY_TITLES.test(it.title || "")) return "High";
   if (RERUN_HEAVY_NETS.test(it.network || "")) return "High";
-  if (it.type === "broadcast" || it.type === "cable") return "Medium";
+  const et = effectiveType(it);
+  if (et === "broadcast" || et === "cable") return "Medium";
   return "Low";
 }
 const STUDIOS_COVERED = /\b(Warner Bros|Universal Television|Universal International|CBS Studios|20th Television|FX Productions|AMC Studios|Disney|Fox Entertainment Studios|Sony Pictures Television|HBO|Apple Studios|UCP|ITV America|ITV Studios|NBCUniversal)\b/i;
@@ -1404,6 +1416,8 @@ async function initApp() {
       channels = (bundle.channels || []).map(_mapChannel);
       agreements = (bundle.agreements || []).map(_mapAgreement);
       items = (bundle.items || []).map(_mapItem);
+      // Seed AI Refresh requests from the same bundle (one permission prompt instead of several).
+      try { aiRequests = Array.isArray(bundle.requests) ? bundle.requests.map(_aiNorm) : []; } catch (e) {}
       const s = bundle.state;
       if (s) {
         const ed = s.edits || {};
@@ -1753,7 +1767,7 @@ if (IS_COWORK) {
     const btn = document.getElementById('aiRefreshSelected');
     if (btn) { btn.style.display = ''; btn.addEventListener('click', aiRefreshSelected); aiUpdateSelCount(); }
   }, 0);
-  setTimeout(() => { aiLoadRequests().then(() => { if (typeof render === 'function') render(); }); }, 1500);
+  // Startup load now comes from the _loadAllInOne bundle (no separate execute_sql call here).
   setInterval(() => { if (aiRequests.some(r => r.status === 'pending')) aiLoadRequests().then(() => { if (typeof render === 'function') render(); }); }, 20000);
 }
 
@@ -1845,7 +1859,7 @@ function render() {
     if (!inSet(filters.production, getProdStatus(it))) return false;
     if (filters.contact === "yes" && !isContacted(it)) return false;
     if (filters.contact === "no" && isContacted(it)) return false;
-    if (!inSet(filters.type, it.type)) return false;
+    if (!inSet(filters.type, effectiveType(it))) return false;
     if (!inSet(filters.genre, it.genre)) return false;
     if (!inSet(filters.subgenre, it.subgenre)) return false;
     if (!inSet(filters.source, it.source)) return false;
@@ -1929,7 +1943,7 @@ function render() {
         <div class="title">${esc(it.title)}</div>
         <div class="meta">
           <span class="net">${esc(it.network)}</span>
-          <span class="net-tag ${it.type}">${esc(it.type)}</span>
+          <span class="net-tag ${effectiveType(it)}">${esc(effectiveType(it))}</span>
           ${it.genre ? `<span class="net-tag ${it.genre}">${esc(it.genre)}</span>` : ''}
           ${it.subgenre ? `<span class="net-tag subgenre">${esc(it.subgenre)}</span>` : ''}
           ${it.source === "crew" ? '<span class="source-tag">crew</span>' : ''}
@@ -2249,7 +2263,7 @@ function exportCsv() {
     if (!inSet(filters.production, getProdStatus(it))) return false;
     if (filters.contact === "yes" && !isContacted(it)) return false;
     if (filters.contact === "no" && isContacted(it)) return false;
-    if (!inSet(filters.type, it.type)) return false;
+    if (!inSet(filters.type, effectiveType(it))) return false;
     if (!inSet(filters.genre, it.genre)) return false;
     if (!inSet(filters.subgenre, it.subgenre)) return false;
     if (!inSet(filters.source, it.source)) return false;
@@ -2262,7 +2276,7 @@ function exportCsv() {
   });
   const headers = ["Title","Priority Tier","Priority Score","Royalty Potential","Rerun Probability","Covered Under License","Music Style","Status","Status Label","Owner","Network","Type","Genre","Subgenre","Studio","Source","Date Added","Detail","Production","User-added"];
   const lines = [headers.map(csvCell).join(",")];
-  rows.forEach(it => lines.push([it.title, it._tier, it._priority, it._royalty, it._rerunProb, it._covered, it._musicStyle, it.status, it.statusLabel, getOwner(it), it.network, it.type, it.genre || "", it.subgenre || "", it.studio, it.source, it.dateAdded || "", it.detail, it.prod || "", it._userAdded ? "yes" : ""].map(csvCell).join(",")));
+  rows.forEach(it => lines.push([it.title, it._tier, it._priority, it._royalty, it._rerunProb, it._covered, it._musicStyle, it.status, it.statusLabel, getOwner(it), it.network, effectiveType(it), it.genre || "", it.subgenre || "", it.studio, it.source, it.dateAdded || "", it.detail, it.prod || "", it._userAdded ? "yes" : ""].map(csvCell).join(",")));
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
