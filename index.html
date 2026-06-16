@@ -597,12 +597,11 @@
 
   <section id="tab-agreements" class="tab-section">
     <header><h1>Agreements Dashboard</h1>
-      <div class="sub">Annual master/sync license agreements. Expand a row to add SalesForce link, covered territories, content types, and detailed notes.</div></header>
+      <div class="sub">Annual master/sync license agreements. Expand a row to add SalesForce link, covered territories, covered channels (broadcasters), and detailed notes.</div></header>
     <div class="dash-toolbar">
       <input type="search" id="ag-q" placeholder="Search entity name or notes…">
       <button class="btn btn-primary" id="ag-addRow">+ Add agreement</button>
       <button class="btn" id="ag-sync" title="Pull the latest team edits from Supabase">↻ Sync from team</button>
-      <button class="btn" id="ag-resetData">↻ Reset to defaults</button>
       <button class="btn" id="ag-exportCsv">⤓ Export CSV</button>
     </div>
     <div class="stats" id="ag-stats"></div>
@@ -619,7 +618,7 @@
       </tr></thead>
       <tbody id="ag-rows"></tbody>
     </table>
-    <footer style="margin-top:18px; font-size:11px; color:var(--muted);">Edits auto-save to Supabase and sync to teammates within ~8 seconds. Click the chevron to expand and capture SalesForce opp, territories, content types, and notes.</footer>
+    <footer style="margin-top:18px; font-size:11px; color:var(--muted);">Edits auto-save to Supabase and sync to teammates within ~8 seconds. Click the chevron to expand and capture SalesForce opp, territories, covered channels, and notes.</footer>
   </section>
 
 </div>
@@ -914,7 +913,7 @@ function _migrateStatus(s) {
 }
 
 function _mapChannel(c) { return { name: c.name, type: chNormType(c.type), parentCompany: c.parent_company || '', royaltyPotential: c.royalty_potential, proPayout: c.pro_payout, rerunProbability: c.rerun_probability, travelProbability: c.travel_probability || '', notes: c.notes || '', aliases: Array.isArray(c.aliases) ? c.aliases : [], updatedAt: c.updated_at || '' }; }
-function _mapAgreement(a) { return { entity: a.entity, entityType: a.entity_type, scope: a.scope, thirdPartySync: a.third_party_sync, renewalDate: a.renewal_date || '', status: a.status, salesforceUrl: a.salesforce_url || '', territories: a.territories || '', contentTypes: Array.isArray(a.content_types) ? a.content_types : [], notes: a.notes || '' }; }
+function _mapAgreement(a) { return { entity: a.entity, entityType: agNormType(a.entity_type), scope: a.scope, thirdPartySync: a.third_party_sync, renewalDate: a.renewal_date || '', status: a.status, salesforceUrl: a.salesforce_url || '', territories: a.territories || '', coveredChannels: Array.isArray(a.content_types) ? a.content_types : [], notes: a.notes || '' }; }
 function _mapItem(r) {
   return {
     source: r.source || 'trade',
@@ -1026,14 +1025,14 @@ async function agSaveRow(a) {
     const sql = "INSERT INTO agreements (entity, entity_type, scope, third_party_sync, renewal_date, status, salesforce_url, territories, content_types, notes, updated_at) VALUES (" +
       _sqlStr(a.entity) + ", " + _sqlStr(a.entityType) + ", " + _sqlStr(a.scope) + ", " + _sqlStr(a.thirdPartySync) + ", " +
       _sqlStr(a.renewalDate || '') + ", " + _sqlStr(a.status) + ", " + _sqlStr(a.salesforceUrl || '') + ", " +
-      _sqlStr(a.territories || '') + ", " + _sqlJson(a.contentTypes || []) + ", " + _sqlStr(a.notes || '') + ", NOW()) " +
+      _sqlStr(a.territories || '') + ", " + _sqlJson(a.coveredChannels || []) + ", " + _sqlStr(a.notes || '') + ", NOW()) " +
       "ON CONFLICT (entity) DO UPDATE SET entity_type=EXCLUDED.entity_type, scope=EXCLUDED.scope, third_party_sync=EXCLUDED.third_party_sync, " +
       "renewal_date=EXCLUDED.renewal_date, status=EXCLUDED.status, salesforce_url=EXCLUDED.salesforce_url, " +
       "territories=EXCLUDED.territories, content_types=EXCLUDED.content_types, notes=EXCLUDED.notes, updated_at=NOW()";
     await _mcpSql(sql);
     return;
   }
-  await sbUpsert('/rest/v1/agreements', [{ entity: a.entity, entity_type: a.entityType, scope: a.scope, third_party_sync: a.thirdPartySync, renewal_date: a.renewalDate || '', status: a.status, salesforce_url: a.salesforceUrl || '', territories: a.territories || '', content_types: a.contentTypes || [], notes: a.notes || '', updated_at: new Date().toISOString() }]);
+  await sbUpsert('/rest/v1/agreements', [{ entity: a.entity, entity_type: a.entityType, scope: a.scope, third_party_sync: a.thirdPartySync, renewal_date: a.renewalDate || '', status: a.status, salesforce_url: a.salesforceUrl || '', territories: a.territories || '', content_types: a.coveredChannels || [], notes: a.notes || '', updated_at: new Date().toISOString() }]);
 }
 async function agDeleteRow(entity) {
   try {
@@ -1074,7 +1073,7 @@ async function agLoadFromDB() {
 }
 async function agSave(arr) {
   try { localStorage.setItem(AG_LS_KEY_SB, JSON.stringify(arr)); } catch {}
-  const rows = arr.map(a => ({ entity: a.entity, entity_type: a.entityType, scope: a.scope, third_party_sync: a.thirdPartySync, renewal_date: a.renewalDate || '', status: a.status, salesforce_url: a.salesforceUrl || '', territories: a.territories || '', content_types: a.contentTypes || [], notes: a.notes || '', updated_at: new Date().toISOString() }));
+  const rows = arr.map(a => ({ entity: a.entity, entity_type: a.entityType, scope: a.scope, third_party_sync: a.thirdPartySync, renewal_date: a.renewalDate || '', status: a.status, salesforce_url: a.salesforceUrl || '', territories: a.territories || '', content_types: a.coveredChannels || [], notes: a.notes || '', updated_at: new Date().toISOString() }));
   if (IS_COWORK) {
     if (!rows.length) return;
     const tuples = rows.map(a => "(" +
@@ -1333,6 +1332,24 @@ function lookupAgreement(studioStr) {
   }
   return best;
 }
+// Does the show's network fall under a broadcaster blanket? Matches the network string
+// (and the resolved channel's canonical name + aliases) against each broadcaster
+// agreement's covered-channels list. Returns the agreement (scope "Yes" only) or null.
+function lookupChannelAgreement(networkStr) {
+  const net = (networkStr || "").toLowerCase().trim(); if (!net) return null;
+  const names = [net];
+  const ch = lookupChannel(networkStr);
+  if (ch) { if (ch.name) names.push(ch.name.toLowerCase().trim()); _chAliases(ch).forEach(a => { if (a) names.push(a.toLowerCase().trim()); }); }
+  for (const a of _agreementsDB()) {
+    if (agNormType(a.entityType) !== "broadcaster" || a.scope !== "Yes") continue;
+    const chans = Array.isArray(a.coveredChannels) ? a.coveredChannels : [];
+    for (const c of chans) {
+      const cn = (c || "").toLowerCase().trim(); if (!cn) continue;
+      if (names.some(n => n && (n === cn || n.includes(cn) || cn.includes(n)))) return a;
+    }
+  }
+  return null;
+}
 
 const ROYALTY_HIGH = /\b(HBO|Max|Netflix|NBC|CBS|ABC|FOX|Hulu|Apple TV\+|Disney\+|Amazon|Prime Video|Peacock|Paramount\+)\b/i;
 const ROYALTY_MED  = /\b(FX|AMC|Bravo|MTV|TLC|HGTV|History|Discovery|Travel Channel|VH1|Freeform|Comedy Central|E!|Starz|Showtime|Tubi|BritBox|Hallmark)\b/i;
@@ -1368,12 +1385,14 @@ function computeRerunProbability(it) {
 const STUDIOS_COVERED = /\b(Warner Bros|Universal Television|Universal International|CBS Studios|20th Television|FX Productions|AMC Studios|Disney|Fox Entertainment Studios|Sony Pictures Television|HBO|Apple Studios|UCP|ITV America|ITV Studios|NBCUniversal)\b/i;
 const STUDIOS_PARTIAL = /\b(Sharp Entertainment|Magilla Entertainment|51 Minds|Bunim\/Murray|Lionsgate|Pie Town|3 Arts|Hillman Grad|Anomaly|Wheelhouse|Spoke Studios|Truly Original|Renegade 83|Asylum Entertainment|Boat Rocker|Mark Burnett|MGM Alternative|Mammoth Screen)\b/i;
 function computeCovered(it) {
+  // 1) Channel blanket: if the show airs on a channel covered by a broadcaster agreement → Yes.
+  const chAg = lookupChannelAgreement(it.network);
+  if (chAg) { it._licenseSource = "db"; it._licenseEntity = chAg.entity; return "Yes"; }
+  // 2) Production-company deal: if the studio matches an agreement with scope Yes → Yes.
   const ag = lookupAgreement(it.studio);
-  if (ag && ag.scope) { it._licenseSource = "db"; it._licenseEntity = ag.entity; return ag.scope; }
-  it._licenseSource = "heuristic"; it._licenseEntity = null;
-  const studio = (it.studio || "");
-  if (STUDIOS_COVERED.test(studio) || STUDIOS_PARTIAL.test(studio)) return "Yes";
-  if (!studio || /TBC|Production company TBC|Unknown/i.test(studio)) return "Unknown";
+  if (ag && ag.scope === "Yes") { it._licenseSource = "db"; it._licenseEntity = ag.entity; return "Yes"; }
+  // 3) Otherwise not covered.
+  it._licenseSource = "db"; it._licenseEntity = null;
   return "No";
 }
 // Royalty classification → score. For now the score is driven ONLY by royalty potential
@@ -2593,38 +2612,44 @@ document.getElementById("ch-exportCsv").addEventListener("click", () => {
 // === Agreements dashboard ==========================================================
 const AG_LS_KEY = "slate-agreements-v1";
 const AG_DEFAULTS = [
-  { entity: "Warner Bros. Discovery",      entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2027-03-31", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "HBO/Max + WB TV scripted/unscripted + owned prod cos." },
-  { entity: "NBCUniversal",                entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2026-12-31", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "NBC, Bravo, USA, Peacock + Universal TV studios." },
-  { entity: "Disney / ABC",                entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2027-06-30", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "ABC, Disney+, 20th TV, Hulu carriage." },
-  { entity: "Paramount Global",            entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2026-09-30", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "CBS, Paramount+, Showtime, MTV/VH1/Comedy Central/TLC." },
-  { entity: "Fox Entertainment Studios",   entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2027-01-31", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "Fox network + Fox Alternative." },
-  { entity: "Apple Studios",               entityType: "broadcaster",        scope: "Yes", thirdPartySync: "No",  renewalDate: "2026-11-30", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "Apple TV+ originals only." },
-  { entity: "AMC Studios",                 entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2026-08-31", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "AMC, AMC+, Sundance, BBC America." },
-  { entity: "Sony Pictures Television",    entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "2027-04-30", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "" },
-  { entity: "FX Productions",              entityType: "network",            scope: "Yes", thirdPartySync: "Yes", renewalDate: "2026-12-31", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "Nested under Disney/FX umbrella." },
-  { entity: "ITV America / ITV Studios",   entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "2026-07-15", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "Covers ITV America productions globally." },
-  { entity: "Sharp Entertainment",         entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "Covered as 3rd-party via TLC/Paramount master." },
-  { entity: "51 Minds Entertainment",      entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "Endemol-owned; covered under NBCU/Bravo umbrella." },
-  { entity: "Magilla Entertainment",       entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "TLC docusoap producer." },
-  { entity: "Bunim/Murray Productions",    entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "" },
-  { entity: "Lionsgate Alternative TV",    entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "2026-10-31", status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "" },
-  { entity: "Mark Burnett / MGM Alternative", entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "2026-12-31", status: "active", salesforceUrl: "", territories: "", contentTypes: [], notes: "Amazon/MGM owned." },
-  { entity: "Mammoth Screen / ITV Studios UK", entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "2027-02-28", status: "active", salesforceUrl: "", territories: "", contentTypes: [], notes: "PBS Masterpiece carriage." },
-  { entity: "3 Arts Entertainment",        entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "" },
-  { entity: "Hillman Grad Productions",    entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", contentTypes: [], notes: "Lena Waithe shingle." },
-  { entity: "Anomaly Entertainment",       entityType: "production company", scope: "No",  thirdPartySync: "No",  renewalDate: "",           status: "negotiating", salesforceUrl: "", territories: "", contentTypes: [], notes: "In talks for framework deal." },
-  { entity: "Wheelhouse Entertainment",    entityType: "production company", scope: "No",  thirdPartySync: "No",  renewalDate: "",           status: "negotiating", salesforceUrl: "", territories: "", contentTypes: [], notes: "" },
-  { entity: "Asylum Entertainment",        entityType: "production company", scope: "No",  thirdPartySync: "No",  renewalDate: "",           status: "negotiating", salesforceUrl: "", territories: "", contentTypes: [], notes: "Outreach pending." }
+  { entity: "Warner Bros. Discovery",      entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2027-03-31", status: "active",      salesforceUrl: "", territories: "", coveredChannels: ["HBO","Max","TNT","TBS","Discovery","HGTV","Food Network","TLC","Animal Planet","Investigation Discovery","Travel Channel","Cartoon Network"], notes: "HBO/Max + WB TV scripted/unscripted + owned prod cos." },
+  { entity: "NBCUniversal",                entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2026-12-31", status: "active",      salesforceUrl: "", territories: "", coveredChannels: ["NBC","Bravo","USA","USA Network","Peacock","E!","Oxygen","Syfy","CNBC","MSNBC","Telemundo"], notes: "NBC, Bravo, USA, Peacock + Universal TV studios." },
+  { entity: "Disney / ABC",                entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2027-06-30", status: "active",      salesforceUrl: "", territories: "", coveredChannels: ["ABC","Disney+","Hulu","Freeform","FX","FXX","National Geographic","Disney Channel"], notes: "ABC, Disney+, 20th TV, Hulu carriage." },
+  { entity: "Paramount Global",            entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2026-09-30", status: "active",      salesforceUrl: "", territories: "", coveredChannels: ["CBS","Paramount+","Showtime","MTV","VH1","Comedy Central","TLC","Nickelodeon","BET","CMT","Pop TV"], notes: "CBS, Paramount+, Showtime, MTV/VH1/Comedy Central/TLC." },
+  { entity: "Fox Entertainment Studios",   entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2027-01-31", status: "active",      salesforceUrl: "", territories: "", coveredChannels: ["FOX","Fox","Tubi"], notes: "Fox network + Fox Alternative." },
+  { entity: "Apple Studios",               entityType: "broadcaster",        scope: "Yes", thirdPartySync: "No",  renewalDate: "2026-11-30", status: "active",      salesforceUrl: "", territories: "", coveredChannels: ["Apple TV+","Apple TV"], notes: "Apple TV+ originals only." },
+  { entity: "AMC Studios",                 entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2026-08-31", status: "active",      salesforceUrl: "", territories: "", coveredChannels: ["AMC","AMC+","Sundance","SundanceTV","BBC America","IFC","Shudder"], notes: "AMC, AMC+, Sundance, BBC America." },
+  { entity: "Sony Pictures Television",    entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "2027-04-30", status: "active",      salesforceUrl: "", territories: "", coveredChannels: [], notes: "" },
+  { entity: "FX Productions",              entityType: "broadcaster",        scope: "Yes", thirdPartySync: "Yes", renewalDate: "2026-12-31", status: "active",      salesforceUrl: "", territories: "", coveredChannels: ["FX","FXX"], notes: "Nested under Disney/FX umbrella." },
+  { entity: "ITV America / ITV Studios",   entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "2026-07-15", status: "active",      salesforceUrl: "", territories: "", coveredChannels: [], notes: "Covers ITV America productions globally." },
+  { entity: "Sharp Entertainment",         entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", coveredChannels: [], notes: "Covered as 3rd-party via TLC/Paramount master." },
+  { entity: "51 Minds Entertainment",      entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", coveredChannels: [], notes: "Endemol-owned; covered under NBCU/Bravo umbrella." },
+  { entity: "Magilla Entertainment",       entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", coveredChannels: [], notes: "TLC docusoap producer." },
+  { entity: "Bunim/Murray Productions",    entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", coveredChannels: [], notes: "" },
+  { entity: "Lionsgate Alternative TV",    entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "2026-10-31", status: "active",      salesforceUrl: "", territories: "", coveredChannels: [], notes: "" },
+  { entity: "Mark Burnett / MGM Alternative", entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "2026-12-31", status: "active", salesforceUrl: "", territories: "", coveredChannels: [], notes: "Amazon/MGM owned." },
+  { entity: "Mammoth Screen / ITV Studios UK", entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "2027-02-28", status: "active", salesforceUrl: "", territories: "", coveredChannels: [], notes: "PBS Masterpiece carriage." },
+  { entity: "3 Arts Entertainment",        entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", coveredChannels: [], notes: "" },
+  { entity: "Hillman Grad Productions",    entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "",           status: "active",      salesforceUrl: "", territories: "", coveredChannels: [], notes: "Lena Waithe shingle." },
+  { entity: "Anomaly Entertainment",       entityType: "production company", scope: "No",  thirdPartySync: "No",  renewalDate: "",           status: "negotiating", salesforceUrl: "", territories: "", coveredChannels: [], notes: "In talks for framework deal." },
+  { entity: "Wheelhouse Entertainment",    entityType: "production company", scope: "No",  thirdPartySync: "No",  renewalDate: "",           status: "negotiating", salesforceUrl: "", territories: "", coveredChannels: [], notes: "" },
+  { entity: "Asylum Entertainment",        entityType: "production company", scope: "No",  thirdPartySync: "No",  renewalDate: "",           status: "negotiating", salesforceUrl: "", territories: "", coveredChannels: [], notes: "Outreach pending." }
 ];
-const AG_ENTITY_TYPES = ["broadcaster", "network", "production company"];
+const AG_ENTITY_TYPES = ["broadcaster", "production company"];
+const AG_TYPE_LABELS = { "broadcaster": "Broadcaster", "production company": "Production Company" };
+// Legacy values (e.g. "network") collapse onto the two supported types.
+function agNormType(t) { const v = (t || "").toLowerCase().trim(); return v === "production company" ? "production company" : "broadcaster"; }
 const AG_SCOPES = ["Yes", "No"];
 const AG_TPS_OPTIONS = ["Yes", "No", "Partial (see notes)"];
 const AG_STATUSES = ["active", "expired", "negotiating"];
-const CONTENT_TYPES = ["Promo Content", "In-Show", "Trailers", "Theme Songs", "Network IDs / Bumpers", "Recap / Stinger", "End Credits"];
 
 let agSearch = "";
 let agExpanded = new Set();
 
+// Covered-channels editor is free text (one channel per line, or comma-separated) → array.
+function parseChannelList(str) {
+  return (str || "").split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+}
 function tpsClass(v) {
   if (v === "Yes") return "tps-Yes";
   if (v === "No") return "tps-No";
@@ -2641,12 +2666,12 @@ function renderAgreements() {
     return `
     <tr data-idx="${realIdx}">
       <td><input type="text" data-field="entity" value="${esc(a.entity)}" style="font-weight:600;"></td>
-      <td><select data-field="entityType">${AG_ENTITY_TYPES.map(t => `<option value="${t}"${t===a.entityType?' selected':''}>${t}</option>`).join("")}</select></td>
+      <td><select data-field="entityType">${AG_ENTITY_TYPES.map(t => `<option value="${t}"${t===agNormType(a.entityType)?' selected':''}>${AG_TYPE_LABELS[t]}</option>`).join("")}</select></td>
       <td><select data-field="scope" class="scope-${esc(a.scope)}">${AG_SCOPES.map(s => `<option value="${s}"${s===a.scope?' selected':''}>${s}</option>`).join("")}</select></td>
       <td><select data-field="thirdPartySync" class="${tpsClass(a.thirdPartySync)}">${AG_TPS_OPTIONS.map(o => `<option value="${o}"${o===a.thirdPartySync?' selected':''}>${o}</option>`).join("")}</select></td>
       <td><input type="date" data-field="renewalDate" value="${esc(a.renewalDate)}"></td>
       <td><select data-field="status" class="status-${esc(a.status)}">${AG_STATUSES.map(s => `<option value="${s}"${s===a.status?' selected':''}>${s}</option>`).join("")}</select></td>
-      <td style="text-align:center;"><span class="expand-btn ${open?'open':''}" data-action="ag-expand" data-idx="${realIdx}" title="Expand for SalesForce link, territories, content types, and notes">${open?'▼':'▶'}</span></td>
+      <td style="text-align:center;"><span class="expand-btn ${open?'open':''}" data-action="ag-expand" data-idx="${realIdx}" title="Expand for SalesForce link, territories, covered channels, and notes">${open?'▼':'▶'}</span></td>
       <td style="text-align:center;"><span class="icon-btn" data-action="ag-delete" data-idx="${realIdx}" title="Delete row">✕</span></td>
     </tr>
     <tr class="expand-row" data-idx="${realIdx}" style="display:${open?'table-row':'none'};">
@@ -2662,15 +2687,11 @@ function renderAgreements() {
               <input type="text" data-field="territories" value="${esc(a.territories||'')}" placeholder="e.g. Worldwide / US + UK / EU only">
             </div>
           </div>
+          ${agNormType(a.entityType) === "broadcaster" ? `
           <div class="field">
-            <label>Covered Content Types</label>
-            <div class="ct-group" data-idx="${realIdx}">
-              ${CONTENT_TYPES.map(ct => {
-                const checked = (a.contentTypes||[]).includes(ct);
-                return `<label class="${checked?'checked':''}"><input type="checkbox" value="${esc(ct)}"${checked?' checked':''}> ${esc(ct)}</label>`;
-              }).join('')}
-            </div>
-          </div>
+            <label>Covered Channels <span style="font-weight:400;color:var(--muted);">— shows airing on these channels count as covered under this blanket. One per line (or comma-separated).</span></label>
+            <textarea data-field="coveredChannels" placeholder="e.g.&#10;HBO&#10;Max&#10;TLC&#10;Bravo">${esc((a.coveredChannels||[]).join("\n"))}</textarea>
+          </div>` : ``}
           <div class="field">
             <label>Detailed Notes for ${esc(a.entity)}</label>
             <textarea data-field="notes" placeholder="Sub-agreements, exceptions, deal points, key contacts, recent renewal terms, anything the team should know about this entity…">${esc(a.notes)}</textarea>
@@ -2692,7 +2713,8 @@ function renderAgreements() {
       const field = e.target.dataset.field; if (!field) return;
       let _renamedFrom = null;
       if (field === "entity") { const oldE = agreements[idx].entity; if (oldE && oldE !== e.target.value) _renamedFrom = oldE; }
-      agreements[idx][field] = e.target.value;
+      if (field === "coveredChannels") agreements[idx][field] = parseChannelList(e.target.value);
+      else agreements[idx][field] = e.target.value;
       if (field === "scope") e.target.className = "scope-" + e.target.value;
       if (field === "status") e.target.className = "status-" + e.target.value;
       if (field === "thirdPartySync") e.target.className = tpsClass(e.target.value);
@@ -2703,6 +2725,8 @@ function renderAgreements() {
       const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
       if (typeof render === "function") render();
       updateBannerCounts();
+      // Switching Type shows/hides the Covered Channels editor.
+      if (field === "entityType") renderAgreements();
     });
     if (el.tagName === "TEXTAREA") {
       el.addEventListener("input", e => {
@@ -2711,30 +2735,22 @@ function renderAgreements() {
           const tr = e.target.closest("tr"); if (!tr) return;
           const idx = parseInt(tr.dataset.idx);
           const field = e.target.dataset.field; if (!field) return;
-          if (agreements[idx] && agreements[idx][field] === e.target.value) return;
-          agreements[idx][field] = e.target.value;
+          const val = field === "coveredChannels" ? parseChannelList(e.target.value) : e.target.value;
+          if (agreements[idx] && JSON.stringify(agreements[idx][field]) === JSON.stringify(val)) return;
+          agreements[idx][field] = val;
           suppressRealtime(); agSaveRow(agreements[idx]);
+          if (field === "coveredChannels") { recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts(); }
         }, 900);
       });
       el.addEventListener("blur", e => {
         clearTimeout(e.target._saveTimer);
         const tr = e.target.closest("tr"); const idx = parseInt(tr.dataset.idx);
         const field = e.target.dataset.field; if (!field) return;
-        agreements[idx][field] = e.target.value; suppressRealtime(); agSaveRow(agreements[idx]);
+        agreements[idx][field] = field === "coveredChannels" ? parseChannelList(e.target.value) : e.target.value;
+        suppressRealtime(); agSaveRow(agreements[idx]);
+        if (field === "coveredChannels") { recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts(); }
       });
     }
-  });
-  tbody.querySelectorAll(".ct-group").forEach(grp => {
-    const idx = parseInt(grp.dataset.idx);
-    grp.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-      cb.addEventListener("change", e => {
-        const label = e.target.closest("label");
-        if (e.target.checked) label.classList.add("checked"); else label.classList.remove("checked");
-        const checked = Array.from(grp.querySelectorAll('input[type="checkbox"]:checked')).map(c => c.value);
-        agreements[idx].contentTypes = checked;
-        suppressRealtime(); agSaveRow(agreements[idx]);
-      });
-    });
   });
   tbody.querySelectorAll('[data-action="ag-delete"]').forEach(el => {
     el.addEventListener("click", () => {
@@ -2762,23 +2778,17 @@ function agUpdateStats() {
 document.getElementById("ag-addRow").addEventListener("click", () => {
   let base = "New entity", en = base, k = 2;
   while (agreements.some(a => a.entity === en)) { en = base + " " + k; k++; }
-  const newRow = { entity: en, entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "", status: "active", salesforceUrl: "", territories: "", contentTypes: [], notes: "" };
+  const newRow = { entity: en, entityType: "production company", scope: "Yes", thirdPartySync: "Partial (see notes)", renewalDate: "", status: "active", salesforceUrl: "", territories: "", coveredChannels: [], notes: "" };
   agreements.unshift(newRow);
   suppressRealtime(8000); agSaveRow(newRow); renderAgreements();
   const inputs = document.querySelectorAll('#ag-rows input[data-field="entity"]');
   for (const inp of inputs) { if (inp.value === en) { inp.focus(); inp.select(); inp.scrollIntoView({ block: "center" }); break; } }
 });
-document.getElementById("ag-resetData").addEventListener("click", () => {
-  if (confirm("Reset all agreements to the seed defaults?")) {
-    agreements = AG_DEFAULTS.slice(); suppressRealtime(); agSave(agreements); renderAgreements();
-    recomputeAllSignals(); if (typeof render === "function") render(); updateBannerCounts();
-  }
-});
 document.getElementById("ag-q").addEventListener("input", e => { agSearch = e.target.value; renderAgreements(); });
 document.getElementById("ag-exportCsv").addEventListener("click", () => {
-  const headers = ["Entity","Type","Covered","Third-Party Sync","Renewal Date","Status","SalesForce URL","Territories","Content Types","Detailed Notes"];
+  const headers = ["Entity","Type","Covered","Third-Party Sync","Renewal Date","Status","SalesForce URL","Territories","Covered Channels","Detailed Notes"];
   const lines = [headers.map(csvCell).join(",")];
-  agreements.forEach(a => lines.push([a.entity, a.entityType, a.scope, a.thirdPartySync, a.renewalDate, a.status, a.salesforceUrl||"", a.territories||"", (a.contentTypes||[]).join("; "), a.notes].map(csvCell).join(",")));
+  agreements.forEach(a => lines.push([a.entity, AG_TYPE_LABELS[agNormType(a.entityType)]||a.entityType, a.scope, a.thirdPartySync, a.renewalDate, a.status, a.salesforceUrl||"", a.territories||"", (a.coveredChannels||[]).join("; "), a.notes].map(csvCell).join(",")));
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
