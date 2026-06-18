@@ -905,6 +905,8 @@ async function sbDel(path) {
 const CH_LS_KEY_SB = 'slate-channels-v1';
 const AG_LS_KEY_SB = 'slate-agreements-v1';
 const ST_LS_KEY_SB = 'tv-tracker-state-v1';
+const IT_LS_KEY_SB = 'slate-items-v1';
+const TAB_LS_KEY = 'tv-tracker-tab-v1';
 
 // Migrate legacy status values to the new 6-status schema.
 function _migrateStatus(s) {
@@ -1111,11 +1113,50 @@ async function loadState() {
   try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
   return s;
 }
+// IMPORTANT: full-row writes were the cause of cross-client data loss. A stale
+// or older client would PATCH the entire `edits` blob (plus favs/archived/added)
+// from its own in-memory copy, silently wiping any field it didn't know about
+// (this is how all notes/opp/music/contacted/favs were lost on 2026-06-18).
+// Every mutation now uses a granular single-key write via _patchKey / _setAdded
+// below, backed by a DB-side guard trigger (slate_state_guard). saveState is kept
+// only as a local-cache refresh and INTENTIONALLY no longer writes the whole row.
 async function saveState(s) {
   try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(s)); } catch {}
-  // Pack music/owners into the edits JSONB so we don't need a schema change.
-  const editsPayload = Object.assign({}, s.edits || {}, { __music: s.music || {}, __owners: s.owners || {}, __contacted: s.contacted || {}, __notes: s.itemNotes || {}, __prodstatus: s.prodStatus || {}, __opp: s.opp || {}, __season: s.season || {} });
-  sbPatch('/rest/v1/slate_state?id=eq.singleton', { favs: s.favs, archived: s.archived, edits: editsPayload, added: s.added, updated_at: new Date().toISOString() });
+}
+function _localCache() { try { localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(state)); } catch {} }
+// Granular write: set or delete ONE key in ONE field of the slate_state row.
+// field is one of: favs | archived | edits | music | owners | contacted | opp | season | notes | prodstatus
+// value === null/undefined => delete that key; otherwise set it to value.
+async function _patchKey(field, key, value) {
+  _localCache();
+  const v = (value === undefined ? null : value);
+  if (IS_COWORK) {
+    const valSql = (v === null) ? 'NULL' : _sqlJson(v);
+    await _mcpSql("SELECT public.slate_patch_key(" + _sqlStr(field) + ", " + _sqlStr(key) + ", " + valSql + ")");
+    return;
+  }
+  const url = SB_URL + '/rest/v1/rpc/slate_patch_key';
+  try {
+    const r = await _authedFetch(url, { method: 'POST', headers: { ...SB_H, 'Prefer': 'return=minimal' }, body: JSON.stringify({ p_field: field, p_key: key, p_value: v }) });
+    let errText = ''; if (!r.ok) { try { errText = await r.text(); } catch {} }
+    _logSb('rpc:patch:' + field, url, r.status, r.ok ? 'ok' : errText);
+  } catch (e) { _logSb('rpc:patch:' + field, url, 0, (e && e.message) || String(e)); }
+}
+// Granular write for the manually-added entries array. Full-array replace, but
+// the DB guard still blocks any write that would bulk-delete entries.
+async function _setAdded(arr) {
+  _localCache();
+  const a = Array.isArray(arr) ? arr : [];
+  if (IS_COWORK) {
+    await _mcpSql("SELECT public.slate_set_added(" + _sqlJson(a) + ")");
+    return;
+  }
+  const url = SB_URL + '/rest/v1/rpc/slate_set_added';
+  try {
+    const r = await _authedFetch(url, { method: 'POST', headers: { ...SB_H, 'Prefer': 'return=minimal' }, body: JSON.stringify({ p_added: a }) });
+    let errText = ''; if (!r.ok) { try { errText = await r.text(); } catch {} }
+    _logSb('rpc:added', url, r.status, r.ok ? 'ok' : errText);
+  } catch (e) { _logSb('rpc:added', url, 0, (e && e.message) || String(e)); }
 }
 
 // === Two-way sync: suppress local-pull while user is actively editing ============
@@ -1428,9 +1469,30 @@ let agreements = [];
 let state = { favs: {}, archived: {}, edits: {}, added: [], music: {}, owners: {}, contacted: {}, itemNotes: {}, prodStatus: {}, opp: {}, season: {} };
 
 async function initApp() {
+  // Yield once so the remainder of the top-level script (e.g. `const filters`) finishes
+  // initializing before we render. The cache-first path below has no other await, so
+  // without this initApp would run fully synchronously and render() would hit a
+  // "Cannot access 'filters' before initialization" temporal-dead-zone error.
+  await Promise.resolve();
   try { _renderMcpDiagBadge(); } catch {}
+  let usedCache = false;
   if (IS_COWORK) {
-    const bundle = await _loadAllInOne();
+    // Cache-first: render instantly from the last-synced local copy so a reload never
+    // blocks on (and re-prompts for) execute_sql. Only hit the DB on the very first load
+    // or via the manual "Sync from team" button. This prevents the permission-prompt /
+    // reload loop that otherwise fires on every page load.
+    usedCache = false;
+    try {
+      const cCh = JSON.parse(localStorage.getItem(CH_LS_KEY_SB) || 'null');
+      const cAg = JSON.parse(localStorage.getItem(AG_LS_KEY_SB) || 'null');
+      const cSt = JSON.parse(localStorage.getItem(ST_LS_KEY_SB) || 'null');
+      const cIt = JSON.parse(localStorage.getItem(IT_LS_KEY_SB) || 'null');
+      if (Array.isArray(cCh) && Array.isArray(cAg) && Array.isArray(cIt) && cIt.length && cSt) {
+        channels = cCh; agreements = cAg; items = cIt; state = cSt;
+        usedCache = true;
+      }
+    } catch (e) {}
+    const bundle = usedCache ? null : await _loadAllInOne();
     if (bundle) {
       channels = (bundle.channels || []).map(_mapChannel);
       agreements = (bundle.agreements || []).map(_mapAgreement);
@@ -1456,8 +1518,9 @@ async function initApp() {
         localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(channels));
         localStorage.setItem(AG_LS_KEY_SB, JSON.stringify(agreements));
         localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(state));
+        localStorage.setItem(IT_LS_KEY_SB, JSON.stringify(items));
       } catch {}
-    } else {
+    } else if (!usedCache) {
       console.warn('[sync] _loadAllInOne returned no data; not seeding to protect remote state.');
       channels = []; agreements = []; items = [];
     }
@@ -1484,9 +1547,12 @@ async function initApp() {
   recomputeAllSignals();
   const sb2 = document.getElementById("sortBy"); if (sb2) sortItems(sb2.value);
   render();
+  // Cache-first startup skips the bundle, so AI Refresh proposals weren't loaded.
+  // Pull them once here so proposals that arrived while the page was closed appear.
+  if (IS_COWORK && usedCache) { aiLoadRequests().then(() => { if (typeof render === 'function') render(); }); }
   setupMultiSelects();
   updateBannerCounts();
-  switchTab((location.hash || "").replace("#","") || "slate");
+  switchTab((location.hash || "").replace("#","") || (function(){ try { return localStorage.getItem(TAB_LS_KEY); } catch(e) { return null; } })() || "slate");
 
   showSyncBadge('synced');
   if (!IS_COWORK) {
@@ -1644,30 +1710,30 @@ function persistAdded() {
     const { _userAdded, _royalty, _rerunProb, _covered, _musicStyle, _priority, _tier, _royaltySource, _rerunSource, _licenseSource, _licenseEntity, ...rest } = it;
     return { ...rest, _userAdded: true };
   });
-  suppressRealtime(); saveState(state);
+  suppressRealtime(); _setAdded(state.added);
 }
 function itemKey(it) { return (it.title || "").toLowerCase().trim() + "|" + (it.source || ""); }
 function applyOverlay(it) { const k = itemKey(it); if (state.edits[k]) return Object.assign({}, it, state.edits[k], { _origKey: k }); return it; }
 function isFav(it) { return !!state.favs[it._origKey || itemKey(it)]; }
 function isArchived(it) { return !!state.archived[it._origKey || itemKey(it)]; }
 function isEdited(it) { return !!state.edits[it._origKey || itemKey(it)]; }
-function toggleFav(it) { const k = itemKey(it); if (state.favs[k]) delete state.favs[k]; else state.favs[k] = true; suppressRealtime(); saveState(state); render(); }
-function toggleArchive(it) { const k = itemKey(it); if (state.archived[k]) delete state.archived[k]; else state.archived[k] = true; suppressRealtime(); saveState(state); render(); }
-function saveEdit(it, fields) { const k = itemKey(it); state.edits[k] = fields; suppressRealtime(); saveState(state); render(); }
-function revertEdit(it) { const k = itemKey(it); delete state.edits[k]; suppressRealtime(); saveState(state); render(); }
+function toggleFav(it) { const k = itemKey(it); const on = !state.favs[k]; if (on) state.favs[k] = true; else delete state.favs[k]; suppressRealtime(); _patchKey('favs', k, on ? true : null); render(); }
+function toggleArchive(it) { const k = itemKey(it); const on = !state.archived[k]; if (on) state.archived[k] = true; else delete state.archived[k]; suppressRealtime(); _patchKey('archived', k, on ? true : null); render(); }
+function saveEdit(it, fields) { const k = itemKey(it); state.edits[k] = fields; suppressRealtime(); _patchKey('edits', k, fields); render(); }
+function revertEdit(it) { const k = itemKey(it); delete state.edits[k]; suppressRealtime(); _patchKey('edits', k, null); render(); }
 function saveMusic(it, value) {
   const k = itemKey(it);
   state.music = state.music || {};
   if (value && value.trim()) state.music[k] = value.trim(); else delete state.music[k];
   it._musicStyle = state.music[k] || "";
   it._priority = computePriority(it); it._tier = tierFromRoyalty(it._royalty);
-  suppressRealtime(); saveState(state);
+  suppressRealtime(); _patchKey('music', k, state.music[k] === undefined ? null : state.music[k]);
 }
 function saveOwner(it, name) {
   const k = itemKey(it);
   state.owners = state.owners || {};
   if (name && name.trim()) state.owners[k] = name.trim(); else delete state.owners[k];
-  suppressRealtime(); saveState(state); render();
+  suppressRealtime(); _patchKey('owners', k, state.owners[k] === undefined ? null : state.owners[k]); render();
 }
 function getOwner(it) { return (state.owners && state.owners[it._origKey || itemKey(it)]) || ""; }
 function isContacted(it) { return !!(state.contacted && state.contacted[it._origKey || itemKey(it)]); }
@@ -1675,7 +1741,7 @@ function toggleContacted(it) {
   const k = itemKey(it);
   state.contacted = state.contacted || {};
   if (state.contacted[k]) delete state.contacted[k]; else state.contacted[k] = true;
-  suppressRealtime(); saveState(state); render();
+  suppressRealtime(); _patchKey('contacted', k, state.contacted[k] ? true : null); render();
 }
 function getOpp(it) { const o = state.opp && state.opp[it._origKey || itemKey(it)]; return (o && typeof o === 'object') ? o : {}; }
 function saveOpp(it, num, url) {
@@ -1683,7 +1749,7 @@ function saveOpp(it, num, url) {
   state.opp = state.opp || {};
   num = (num || "").trim(); url = (url || "").trim();
   if (num || url) state.opp[k] = { num, url }; else delete state.opp[k];
-  suppressRealtime(); saveState(state);
+  suppressRealtime(); _patchKey('opp', k, state.opp[k] === undefined ? null : state.opp[k]);
 }
 function getSeason(it) { return (state.season && state.season[it._origKey || itemKey(it)]) || ""; }
 // === Per-entry AI Refresh (Cowork artifact only) ==================================
@@ -1707,6 +1773,16 @@ async function aiLoadRequests() {
 }
 function _aiItemId(it) { return it._origKey || itemKey(it); }
 function aiReqFor(it) { const id = _aiItemId(it); return aiRequests.find(r => r.item_id === id); }
+// Sort rank for floating AI Refresh updates to the top of the list:
+// 0 = has a proposal ready to approve/dismiss, 1 = pending (queued), 2 = no active request.
+// try/catch guards the top-level sortItems() call that runs before aiRequests is initialized.
+function _aiUpdateRank(it) {
+  try {
+    const r = aiReqFor(it);
+    if (!r) return 2;
+    return r.status === 'proposed' ? 0 : 1;
+  } catch (e) { return 2; }
+}
 const aiSelected = new Set();
 function _aiPayload(it) {
   return { title: it.title || '', network: it.network || '', studio: it.studio || '', status: it.status || '', status_label: it.statusLabel || '', prod: it.prod || '', season: getSeason(it) || '', air_date: it.airDate || '', detail: it.detail || '' };
@@ -1794,14 +1870,14 @@ function saveSeason(it, value) {
   const k = itemKey(it);
   state.season = state.season || {};
   if (value && String(value).trim()) state.season[k] = String(value).trim(); else delete state.season[k];
-  suppressRealtime(); saveState(state);
+  suppressRealtime(); _patchKey('season', k, state.season[k] === undefined ? null : state.season[k]);
 }
 function getNote(it) { return (state.itemNotes && state.itemNotes[it._origKey || itemKey(it)]) || ""; }
 function saveNote(it, value) {
   const k = itemKey(it);
   state.itemNotes = state.itemNotes || {};
   if (value && value.trim()) state.itemNotes[k] = value; else delete state.itemNotes[k];
-  suppressRealtime(); saveState(state);
+  suppressRealtime(); _patchKey('notes', k, state.itemNotes[k] === undefined ? null : state.itemNotes[k]);
 }
 function _deriveProdFromText(t) {
   const s = (t || "").toLowerCase();
@@ -1824,7 +1900,7 @@ function setProdStatus(it, val) {
   const k = itemKey(it);
   state.prodStatus = state.prodStatus || {}; state.opp = state.opp || {}; state.season = state.season || {};
   state.prodStatus[k] = PROD_STATUSES.includes(val) ? val : "";
-  suppressRealtime(); saveState(state);
+  suppressRealtime(); _patchKey('prodstatus', k, state.prodStatus[k]);
 }
 
 items.forEach(it => {
@@ -1912,6 +1988,9 @@ function render() {
     }
     return true;
   });
+  // Float entries with an active AI Refresh to the top (proposals first, then pending) so
+  // updates are easy to find and approve/dismiss. Stable sort preserves the chosen sort order within each group.
+  visible.sort((a, b) => _aiUpdateRank(a) - _aiUpdateRank(b));
   const counts = items.reduce((acc, it) => { acc[it.status] = (acc[it.status] || 0) + 1; return acc; }, {});
   const tierCounts = items.reduce((acc, it) => { acc[it._tier] = (acc[it._tier] || 0) + 1; return acc; }, {});
   const yes = items.filter(i => i._covered === "Yes").length;
@@ -2151,8 +2230,8 @@ function render() {
           slDeleteItem({ title: _oldTitle, source: _oldSource });
         }
         // The inline edit is now folded into the base item; drop any leftover edit overlay.
-        if (state.edits[_newKey]) { delete state.edits[_newKey]; }
-        suppressRealtime(); saveState(state);
+        if (state.edits[_newKey]) { delete state.edits[_newKey]; suppressRealtime(); _patchKey('edits', _newKey, null); }
+        else { _localCache(); }
       }
       else if (action === "deleteAdded") {
         if (!confirm(`Delete "${baseItem.title}"?`)) return;
@@ -2314,6 +2393,9 @@ async function _doManualSync(btn) {
       if (bundle) {
         if (Array.isArray(bundle.channels)) channels = bundle.channels.map(_mapChannel);
         if (Array.isArray(bundle.agreements)) agreements = bundle.agreements.map(_mapAgreement);
+        if (Array.isArray(bundle.items)) items = bundle.items.map(_mapItem);
+        // Seed AI Refresh requests too, so proposals surface on a manual sync.
+        try { aiRequests = Array.isArray(bundle.requests) ? bundle.requests.map(_aiNorm) : []; } catch (e) {}
         if (bundle.state) {
           const s = bundle.state;
           const ed = s.edits || {};
@@ -2332,6 +2414,7 @@ async function _doManualSync(btn) {
           localStorage.setItem(CH_LS_KEY_SB, JSON.stringify(channels));
           localStorage.setItem(AG_LS_KEY_SB, JSON.stringify(agreements));
           localStorage.setItem(ST_LS_KEY_SB, JSON.stringify(state));
+          localStorage.setItem(IT_LS_KEY_SB, JSON.stringify(items));
         } catch {}
         recomputeAllSignals();
         const sb = document.getElementById("sortBy"); if (sb) sortItems(sb.value);
@@ -2377,6 +2460,7 @@ function switchTab(name) {
   document.querySelectorAll(".tab-section").forEach(s => s.classList.toggle("active", s.id === "tab-" + name));
   document.querySelectorAll(".proto-tabs a").forEach(a => a.classList.toggle("active", a.dataset.tab === name));
   try { history.replaceState(null, "", "#" + name); } catch(e) {}
+  try { localStorage.setItem(TAB_LS_KEY, name); } catch(e) {}
   if (name === "channels") renderChannels();
   if (name === "agreements") renderAgreements();
 }
